@@ -1,122 +1,423 @@
-import { useState } from 'react'
-import heroImg from './assets/hero.png'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import './App.css'
 
-function App() {
-  const [count, setCount] = useState(0)
+import { useEffect, useState } from "react";
+import type { FormEvent } from "react";
+import type { Session } from "@supabase/supabase-js";
+import { supabase } from "./lib/supabase";
+import "./index.css";
 
-  return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.tsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+type Category = {
+  id: string;
+  name: string;
+  kind: "income" | "expense";
+  is_active: boolean;
+};
 
-      <div className="ticks"></div>
+type Settings = {
+  opening_balance_paisa: number;
+  opening_balance_date: string;
+  currency: string;
+  week_starts_on: string;
+};
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+type AuthMode = "signin" | "signup";
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
-  )
+function formatBDT(paisa: number | string) {
+  return new Intl.NumberFormat("en-BD", {
+    style: "currency",
+    currency: "BDT",
+  }).format(Number(paisa) / 100);
 }
 
-export default App
+export default function App() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [dataLoading, setDataLoading] = useState(false);
+
+  const [mode, setMode] = useState<AuthMode>("signin");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+
+  const [settings, setSettings] = useState<Settings | null>(null);
+  const [categories, setCategories] = useState<Category[]>([]);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+
+    async function loadSession() {
+      const { data, error } = await supabase.auth.getSession();
+
+      if (!active) return;
+
+      if (error) {
+        setError(error.message);
+      }
+
+      setSession(data.session);
+      setAuthLoading(false);
+    }
+
+    void loadSession();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      setAuthLoading(false);
+      setError("");
+      setMessage("");
+    });
+
+    return () => {
+      active = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!session?.user.id) {
+      setSettings(null);
+      setCategories([]);
+      return;
+    }
+
+    let active = true;
+
+    async function loadUserData() {
+      setDataLoading(true);
+      setError("");
+
+      try {
+        const [settingsResult, categoriesResult] = await Promise.all([
+          supabase
+            .from("settings")
+            .select(
+              "opening_balance_paisa, opening_balance_date, currency, week_starts_on"
+            )
+            .eq("user_id", session!.user.id)
+            .maybeSingle(),
+
+          supabase
+            .from("categories")
+            .select("id, name, kind, is_active")
+            .eq("user_id", session!.user.id)
+            .order("kind")
+            .order("name"),
+        ]);
+
+        if (!active) return;
+
+        if (settingsResult.error) {
+          throw new Error(
+            `Could not load settings: ${settingsResult.error.message}`
+          );
+        }
+
+        if (categoriesResult.error) {
+          throw new Error(
+            `Could not load categories: ${categoriesResult.error.message}`
+          );
+        }
+
+        setSettings(settingsResult.data);
+        setCategories(categoriesResult.data ?? []);
+
+        if (!settingsResult.data) {
+          setError(
+            "Your settings row is missing. Check the database initialization trigger."
+          );
+        }
+      } catch (err) {
+        if (active) {
+          setError(
+            err instanceof Error ? err.message : "Could not load your data."
+          );
+        }
+      } finally {
+        if (active) setDataLoading(false);
+      }
+    }
+
+    void loadUserData();
+
+    return () => {
+      active = false;
+    };
+  }, [session?.user.id]);
+
+  async function handleAuth(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    setMessage("");
+
+    if (!email.trim() || !password) {
+      setError("Enter your email and password.");
+      return;
+    }
+
+    if (mode === "signup" && password.length < 8) {
+      setError("Use a password with at least 8 characters.");
+      return;
+    }
+
+    if (mode === "signup") {
+      const { data, error } = await supabase.auth.signUp({
+        email: email.trim(),
+        password,
+        options: {
+          emailRedirectTo: window.location.origin,
+        },
+      });
+
+      if (error) {
+        setError(error.message);
+        return;
+      }
+
+      if (data.session) {
+        setMessage("Account created. Your BrokeOrNot setup is ready.");
+      } else {
+        setMessage(
+          "Account created. Check your email to confirm your account, then sign in."
+        );
+      }
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: email.trim(),
+        password,
+      });
+
+      if (error) {
+        setError(error.message);
+      }
+    }
+  }
+
+  async function handleSignOut() {
+    setError("");
+    setMessage("");
+
+    const { error } = await supabase.auth.signOut();
+
+    if (error) setError(error.message);
+  }
+
+
+  async function checkOtherUserReadIsolation() {
+    if (!session) return;
+
+    const otherUserId = window
+      .prompt("Enter the other test account's User ID:")
+      ?.trim();
+
+    if (!otherUserId) return;
+
+    if (otherUserId === session.user.id) {
+      setError("Use the other account's User ID, not your own.");
+      return;
+    }
+
+    setError("");
+    setMessage("");
+
+    const { data, error } = await supabase
+      .from("categories")
+      .select("id, name")
+      .eq("user_id", otherUserId);
+
+    if (error) {
+      setError(
+        `RLS test inconclusive: ${error.message}`
+      );
+      return;
+    }
+
+    if (data.length === 0) {
+      setMessage(
+        "Read-isolation test passed: no categories from the other account were visible."
+      );
+    } else {
+      setError(
+        `RLS WARNING: ${data.length} category row(s) from the other account were visible. Stop testing and review RLS policies.`
+      );
+    }
+  }
+
+
+  if (authLoading) {
+    return <main className="page"><p>Loading BrokeOrNot…</p></main>;
+  }
+
+  if (!session) {
+    return (
+      <main className="page">
+        <section className="panel auth-panel">
+          <p className="eyebrow">PERSONAL FINANCE TRACKER</p>
+          <h1>BrokeOrNot</h1>
+          <p className="muted">
+            Track your balance, transactions, and upcoming expenses.
+          </p>
+
+          <div className="tabs">
+            <button
+              type="button"
+              className={mode === "signin" ? "tab active" : "tab"}
+              onClick={() => {
+                setMode("signin");
+                setError("");
+                setMessage("");
+              }}
+            >
+              Sign in
+            </button>
+            <button
+              type="button"
+              className={mode === "signup" ? "tab active" : "tab"}
+              onClick={() => {
+                setMode("signup");
+                setError("");
+                setMessage("");
+              }}
+            >
+              Create account
+            </button>
+          </div>
+
+          <form onSubmit={handleAuth}>
+            <label htmlFor="email">Email address</label>
+            <input
+              id="email"
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              required
+            />
+
+            <label htmlFor="password">Password</label>
+            <input
+              id="password"
+              type="password"
+              autoComplete={
+                mode === "signup" ? "new-password" : "current-password"
+              }
+              minLength={8}
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              required
+            />
+
+            <button className="primary-button" type="submit">
+              {mode === "signup" ? "Create account" : "Sign in"}
+            </button>
+          </form>
+
+          {message && <p className="success">{message}</p>}
+          {error && <p className="error">{error}</p>}
+
+          <p className="small muted">
+            Your financial records are private to your account.
+          </p>
+        </section>
+      </main>
+    );
+  }
+
+  const incomeCount = categories.filter(
+    (category) => category.kind === "income"
+  ).length;
+  const expenseCount = categories.filter(
+    (category) => category.kind === "expense"
+  ).length;
+
+  return (
+    <main className="page">
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">YOUR PERSONAL FINANCES</p>
+          <h1>BrokeOrNot</h1>
+        </div>
+        <button className="secondary-button" onClick={handleSignOut}>
+          Sign out
+        </button>
+      </header>
+
+      <section className="panel">
+        <p className="muted">Signed in as</p>
+        <strong>{session.user.email}</strong>
+        <p className="small muted">
+          User ID: <code>{session.user.id}</code>
+        </p>
+      </section>
+
+      {error && <p className="error">{error}</p>}
+      {message && <p className="success">{message}</p>}
+
+      {dataLoading ? (
+        <p>Loading your financial setup…</p>
+      ) : (
+        <>
+          <section className="summary-grid">
+            <article className="panel">
+              <p className="muted">Opening balance</p>
+              <h2>
+                {settings
+                  ? formatBDT(settings.opening_balance_paisa)
+                  : "Not set"}
+              </h2>
+              <p className="small muted">
+                {settings?.opening_balance_date ?? ""}
+              </p>
+            </article>
+
+            <article className="panel">
+              <p className="muted">Income categories</p>
+              <h2>{incomeCount}</h2>
+            </article>
+
+            <article className="panel">
+              <p className="muted">Expense categories</p>
+              <h2>{expenseCount}</h2>
+            </article>
+          </section>
+
+          <section className="panel">
+            <h2>Your categories</h2>
+            {categories.length === 0 ? (
+              <p className="muted">
+                No categories found. Check the initialization trigger.
+              </p>
+            ) : (
+              <ul className="category-list">
+                {categories.map((category) => (
+                  <li key={category.id}>
+                    <span>{category.name}</span>
+                    <span className="pill">
+                      {category.kind === "income" ? "Income" : "Expense"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+
+          <section className="panel">
+            <h2>Security check</h2>
+            <p className="muted">
+              Test whether another user's categories are hidden by
+              database security policies.
+            </p>
+            <button
+              className="secondary-button"
+              onClick={checkOtherUserReadIsolation}
+            >
+              Test RLS read isolation
+            </button>
+          </section>
+
+        </>
+      )}
+    </main>
+  );
+}
