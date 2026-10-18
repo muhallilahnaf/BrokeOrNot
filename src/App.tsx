@@ -4,6 +4,8 @@ import type { FormEvent } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./lib/supabase";
 import "./index.css";
+import Transactions from "./components/Transactions";
+import ImportTransactions from "./components/ImportTransactions";
 
 type Category = {
   id: string;
@@ -13,7 +15,7 @@ type Category = {
 };
 
 type Settings = {
-  opening_balance_paisa: number;
+  opening_balance_paisa: number | string;
   opening_balance_date: string;
   currency: string;
   week_starts_on: string;
@@ -41,6 +43,8 @@ export default function App() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+
+  const [transactionRefreshKey, setTransactionRefreshKey] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -401,6 +405,29 @@ export default function App() {
               </ul>
             )}
           </section>
+
+          {settings && (
+            <>
+              <Transactions
+                userId={session.user.id}
+                openingBalancePaisa={settings.opening_balance_paisa}
+                openingBalanceDate={settings.opening_balance_date}
+                categories={categories}
+                refreshKey={transactionRefreshKey}
+              />
+              <ImportTransactions
+                userId={session.user.id}
+                openingBalanceDate={settings.opening_balance_date}
+                categories={categories}
+                onImported={() =>
+                  setTransactionRefreshKey((key) => key + 1)
+                }
+              />
+            </>
+          )}
+
+
+
 
           <section className="panel">
             <h2>Security check</h2>
