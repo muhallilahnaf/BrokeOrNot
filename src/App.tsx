@@ -11,6 +11,7 @@ import Settings, {
 } from "./components/Settings";
 import RecurringSchedules from "./components/RecurringSchedules";
 import RecurringOccurrences from "./components/RecurringOccurrences";
+import CalendarForecast from "./components/CalendarForecast";
 
 type Category = {
   id: string;
@@ -463,6 +464,14 @@ export default function App() {
                 openingBalancePaisa={settings.opening_balance_paisa}
                 openingBalanceDate={settings.opening_balance_date}
                 categories={categories} />
+              <CalendarForecast
+                key={session.user.id}
+                userId={session.user.id}
+                openingBalancePaisa={settings.opening_balance_paisa}
+                openingBalanceDate={settings.opening_balance_date}
+                weekStartsOn={settings.week_starts_on}
+                forecastHorizonMonths={settings.forecast_horizon_months}
+              />
               <RecurringSchedules
                 key={session.user.id}
                 userId={session.user.id}
