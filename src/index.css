@@ -707,3 +707,42 @@ button:disabled {
     min-width: 0;
   }
 }
+
+
+/* Settings management */
+
+.settings-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.settings-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  max-width: 620px;
+}
+
+.settings-form .field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.settings-form input,
+.settings-form select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+
+.settings-form .primary-button {
+  align-self: flex-start;
+}
+
+@media (max-width: 600px) {
+  .settings-form .primary-button {
+    width: 100%;
+  }
+}

@@ -6,19 +6,15 @@ import { supabase } from "./lib/supabase";
 import "./index.css";
 import Transactions from "./components/Transactions";
 import Categories from "./components/Categories";
+import Settings, {
+  type UserSettings,
+} from "./components/Settings";
 
 type Category = {
   id: string;
   name: string;
   kind: "income" | "expense";
   is_active: boolean;
-};
-
-type Settings = {
-  opening_balance_paisa: number | string;
-  opening_balance_date: string;
-  currency: string;
-  week_starts_on: string;
 };
 
 type AuthMode = "signin" | "signup";
@@ -39,7 +35,7 @@ export default function App() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
 
-  const [settings, setSettings] = useState<Settings | null>(null);
+  const [settings, setSettings] = useState<UserSettings | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -83,6 +79,7 @@ export default function App() {
     if (!userId) {
       return;
     }
+    const currentUserId: string = userId;
 
     let active = true;
 
@@ -94,15 +91,16 @@ export default function App() {
           supabase
             .from("settings")
             .select(
-              "opening_balance_paisa, opening_balance_date, currency, week_starts_on"
+              "id, user_id, opening_balance_paisa, opening_balance_date, " +
+              "currency, week_starts_on, forecast_horizon_months, updated_at"
             )
-            .eq("user_id", userId)
+            .eq("user_id", currentUserId)
             .maybeSingle(),
 
           supabase
             .from("categories")
             .select("id, name, kind, is_active")
-            .eq("user_id", userId)
+            .eq("user_id", currentUserId)
             .order("kind")
             .order("name"),
         ]);
@@ -121,7 +119,7 @@ export default function App() {
           );
         }
 
-        setSettings(settingsResult.data);
+        setSettings(settingsResult.data as unknown as UserSettings | null);
         setCategories(categoriesResult.data ?? []);
 
         if (!settingsResult.data) {
@@ -138,7 +136,7 @@ export default function App() {
           );
         }
       } finally {
-        if (active) setLoadedUserId(userId);
+        if (active) setLoadedUserId(currentUserId);
       }
     }
 
@@ -226,6 +224,33 @@ export default function App() {
     }
 
     setCategories(data ?? []);
+  }
+
+  async function refreshSettings(): Promise<void> {
+    const currentUserId = session?.user.id;
+
+    if (!currentUserId) {
+      throw new Error("No signed-in user was found.");
+    }
+
+    const { data, error } = await supabase
+      .from("settings")
+      .select(
+        "id, user_id, opening_balance_paisa, opening_balance_date, " +
+        "currency, week_starts_on, forecast_horizon_months, updated_at"
+      )
+      .eq("user_id", currentUserId)
+      .single();
+
+    if (error) {
+      throw new Error(`Could not refresh settings: ${error.message}`);
+    }
+
+    if (!data) {
+      throw new Error("No settings record was found for this account.");
+    }
+
+    setSettings(data as unknown as UserSettings);
   }
 
   async function checkOtherUserReadIsolation() {
@@ -420,11 +445,17 @@ export default function App() {
 
           {settings && (
             <>
+              <Settings
+                userId={session.user.id}
+                settings={settings}
+                onSettingsChanged={refreshSettings}
+              />
               <Categories
                 userId={session.user.id}
                 categories={categories}
                 onCategoriesChanged={refreshCategories} />
               <Transactions
+                key={`${settings.opening_balance_paisa}:${settings.opening_balance_date}`}
                 userId={session.user.id}
                 openingBalancePaisa={settings.opening_balance_paisa}
                 openingBalanceDate={settings.opening_balance_date}
