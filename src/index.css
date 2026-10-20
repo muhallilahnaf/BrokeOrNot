@@ -913,3 +913,136 @@ button:disabled {
     width: 100%;
   }
 }
+
+
+
+/* Scheduled occurrences */
+
+.occurrences-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.occurrences-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 14px;
+}
+
+.occurrences-heading h2 {
+  margin-top: 0;
+  margin-bottom: 8px;
+}
+
+.occurrences-heading p {
+  margin-bottom: 0;
+  max-width: 680px;
+}
+
+.occurrences-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.occurrence-summary-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px;
+  border: 1px solid #d8dce3;
+  border-radius: 10px;
+}
+
+.occurrence-summary-card strong {
+  font-size: 1.4rem;
+}
+
+.occurrences-filter {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: 280px;
+}
+
+.occurrences-filter select {
+  box-sizing: border-box;
+  width: 100%;
+}
+
+.occurrences-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.occurrence-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px;
+  border: 1px solid #d8dce3;
+  border-radius: 10px;
+}
+
+.occurrence-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.occurrence-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.occurrence-amount {
+  font-size: 1.1rem;
+  overflow-wrap: anywhere;
+}
+
+.occurrence-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  color: #626977;
+  font-size: 0.9rem;
+}
+
+.status-pending {
+  background: #fff2d9;
+  color: #805900;
+}
+
+.status-paid {
+  background: #e8f5eb;
+  color: #22683a;
+}
+
+.status-skipped,
+.status-cancelled {
+  background: #f1f2f4;
+  color: #5d6470;
+}
+
+@media (max-width: 600px) {
+  .occurrences-summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .occurrences-heading {
+    flex-direction: column;
+  }
+
+  .occurrences-heading .primary-button {
+    width: 100%;
+  }
+}

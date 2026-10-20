@@ -10,6 +10,7 @@ import Settings, {
   type UserSettings,
 } from "./components/Settings";
 import RecurringSchedules from "./components/RecurringSchedules";
+import RecurringOccurrences from "./components/RecurringOccurrences";
 
 type Category = {
   id: string;
@@ -462,6 +463,11 @@ export default function App() {
                 openingBalanceDate={settings.opening_balance_date}
                 categories={categories} />
               <RecurringSchedules
+                key={session.user.id}
+                userId={session.user.id}
+                categories={categories}
+              />
+              <RecurringOccurrences
                 key={session.user.id}
                 userId={session.user.id}
                 categories={categories}
