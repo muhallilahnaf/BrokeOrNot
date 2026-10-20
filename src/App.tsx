@@ -41,6 +41,7 @@ export default function App() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [transactionRefreshKey, setTransactionRefreshKey] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -457,7 +458,7 @@ export default function App() {
                 categories={categories}
                 onCategoriesChanged={refreshCategories} />
               <Transactions
-                key={`${settings.opening_balance_paisa}:${settings.opening_balance_date}`}
+                key={`${settings.opening_balance_paisa}:${settings.opening_balance_date}:${transactionRefreshKey}`}
                 userId={session.user.id}
                 openingBalancePaisa={settings.opening_balance_paisa}
                 openingBalanceDate={settings.opening_balance_date}
@@ -471,6 +472,9 @@ export default function App() {
                 key={session.user.id}
                 userId={session.user.id}
                 categories={categories}
+                onTransactionCreated={() =>
+                  setTransactionRefreshKey((key) => key + 1)
+                }
               />
             </>
 

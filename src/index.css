@@ -1046,3 +1046,47 @@ button:disabled {
     width: 100%;
   }
 }
+
+
+
+/* Scheduled payment editor */
+
+.payment-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 18px;
+  border: 1px solid #d8dce3;
+  border-radius: 10px;
+}
+
+.payment-editor h3,
+.payment-editor p {
+  margin-top: 0;
+  margin-bottom: 0;
+}
+
+.payment-editor .field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.payment-editor input,
+.payment-editor textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+
+.payment-editor .recurring-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+@media (max-width: 600px) {
+  .payment-editor .recurring-actions button {
+    flex: 1;
+  }
+}
