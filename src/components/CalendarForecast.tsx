@@ -4,15 +4,11 @@ import { supabase } from "../lib/supabase";
 import { formatPaisa } from "../lib/money";
 import "./CalendarForecast.css";
 
-type Kind = "income" | "expense";
-type WeekStart = "sunday" | "monday" | "saturday";
-type OccurrenceStatus = "pending" | "paid" | "skipped" | "cancelled";
-
 type Props = {
   userId: string;
   openingBalancePaisa: string | number;
   openingBalanceDate: string;
-  weekStartsOn: WeekStart;
+  weekStartsOn: "sunday" | "monday" | "saturday";
   forecastHorizonMonths: number;
 };
 
@@ -20,40 +16,58 @@ type Transaction = {
   id: string;
   transaction_date: string;
   description: string;
-  kind: Kind;
+  kind: "income" | "expense";
   amount_paisa: string | number;
   source: string;
+};
+
+type ScheduleOccurrence = {
+  id: string;
+  schedule_id: string;
+  due_date: string;
+  status: "pending" | "paid" | "skipped" | "cancelled";
+  transaction_id: string | null;
 };
 
 type Schedule = {
   id: string;
   name: string;
-  kind: Kind;
+  kind: "income" | "expense";
   amount_paisa: string | number;
-};
-
-type Occurrence = {
-  id: string;
-  schedule_id: string;
-  due_date: string;
-  status: OccurrenceStatus;
-  transaction_id: string | null;
 };
 
 type CalendarEntry = {
   id: string;
   date: string;
-  title: string;
-  kind: Kind;
+  description: string;
+  kind: "income" | "expense";
   amount: bigint;
   type: "transaction" | "scheduled";
-  status?: OccurrenceStatus;
+  source?: string;
 };
+
+type DailyTotals = {
+  income: bigint;
+  expense: bigint;
+};
+
+const PAGE_SIZE = 1000;
+
+const WEEKDAY_LABELS = [
+  "Sun",
+  "Mon",
+  "Tue",
+  "Wed",
+  "Thu",
+  "Fri",
+  "Sat",
+];
 
 function dateString(date: Date): string {
   const year = date.getFullYear();
   const month = String(date.getMonth() + 1).padStart(2, "0");
   const day = String(date.getDate()).padStart(2, "0");
+
   return `${year}-${month}-${day}`;
 }
 
@@ -62,27 +76,47 @@ function parseDate(value: string): Date {
   return new Date(year, month - 1, day);
 }
 
-function shiftMonth(date: Date, amount: number): Date {
-  return new Date(date.getFullYear(), date.getMonth() + amount, 1);
+function shiftMonth(value: string, amount: number): string {
+  const date = parseDate(value);
+  date.setDate(1);
+  date.setMonth(date.getMonth() + amount);
+  return dateString(date);
 }
 
-function monthStart(value: Date): string {
-  return dateString(new Date(value.getFullYear(), value.getMonth(), 1));
+function monthStart(value: string): string {
+  const date = parseDate(value);
+  date.setDate(1);
+  return dateString(date);
 }
 
-function monthEnd(value: Date): string {
-  return dateString(new Date(value.getFullYear(), value.getMonth() + 1, 0));
+function monthEnd(value: string): string {
+  const date = parseDate(value);
+  date.setMonth(date.getMonth() + 1, 0);
+  return dateString(date);
 }
 
-function monthLabel(value: Date): string {
-  return value.toLocaleDateString("en-BD", {
+function monthLabel(value: string): string {
+  return new Intl.DateTimeFormat("en-BD", {
     month: "long",
     year: "numeric",
-  });
+  }).format(parseDate(value));
 }
 
-function safeAmount(value: string | number): bigint {
-  return BigInt(value);
+function fullDateLabel(value: string): string {
+  return new Intl.DateTimeFormat("en-BD", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  }).format(parseDate(value));
+}
+
+function safeAmount(value: string | number | bigint): bigint {
+  try {
+    return BigInt(value);
+  } catch {
+    return 0n;
+  }
 }
 
 function moneyTotal(value: bigint): string {
@@ -91,16 +125,34 @@ function moneyTotal(value: bigint): string {
 
 function addSigned(
   balance: bigint,
-  kind: Kind,
+  kind: "income" | "expense",
   amount: bigint,
 ): bigint {
   return kind === "income" ? balance + amount : balance - amount;
 }
 
-function getWeekdayIndex(start: WeekStart): number {
-  if (start === "monday") return 1;
-  if (start === "saturday") return 6;
+function getWeekdayIndex(
+  weekStartsOn: Props["weekStartsOn"],
+): number {
+  if (weekStartsOn === "monday") return 1;
+  if (weekStartsOn === "saturday") return 6;
   return 0;
+}
+
+function emptyTotals(): DailyTotals {
+  return { income: 0n, expense: 0n };
+}
+
+function addToTotals(
+  totals: DailyTotals,
+  kind: "income" | "expense",
+  amount: bigint,
+): DailyTotals {
+  if (kind === "income") {
+    return { ...totals, income: totals.income + amount };
+  }
+
+  return { ...totals, expense: totals.expense + amount };
 }
 
 export default function CalendarForecast({
@@ -110,53 +162,81 @@ export default function CalendarForecast({
   weekStartsOn,
   forecastHorizonMonths,
 }: Props) {
-  const [selectedMonth, setSelectedMonth] = useState(
-    () => new Date(new Date().getFullYear(), new Date().getMonth(), 1),
-  );
+  const today = dateString(new Date());
+  const initialMonth = monthStart(today);
+
+  const [visibleMonth, setVisibleMonth] = useState(initialMonth);
+  const [selectedDate, setSelectedDate] = useState(today);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
-  const [occurrences, setOccurrences] = useState<Occurrence[]>([]);
+  const [occurrences, setOccurrences] = useState<ScheduleOccurrence[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
 
-  const today = dateString(new Date());
+  const openingBalance = safeAmount(openingBalancePaisa);
+
+  const horizonEnd = useMemo(() => {
+    const date = parseDate(today);
+    date.setMonth(date.getMonth() + forecastHorizonMonths);
+    return dateString(date);
+  }, [today, forecastHorizonMonths]);
 
   const loadData = useCallback(async () => {
-    const [transactionRows, occurrenceRows, scheduleRows] =
-      await Promise.all([
-          supabase
-            .from("transactions")
-            .select(
-              "id,transaction_date,description,kind,amount_paisa,source",
-            )
-            .eq("user_id", userId)
-            .gte("transaction_date", openingBalanceDate)
-            .order("transaction_date", { ascending: true }),
+      const loadedTransactions: Transaction[] = [];
 
-          supabase
-            .from("schedule_occurrences")
-            .select("id,schedule_id,due_date,status,transaction_id")
-            .eq("user_id", userId)
-            .gte("due_date", openingBalanceDate)
-            .order("due_date", { ascending: true }),
+      for (let from = 0; ; from += PAGE_SIZE) {
+        const { data, error: transactionError } = await supabase
+          .from("transactions")
+          .select(
+            "id,transaction_date,description,kind,amount_paisa,source",
+          )
+          .eq("user_id", userId)
+          .gte("transaction_date", openingBalanceDate)
+          .order("transaction_date", { ascending: true })
+          .range(from, from + PAGE_SIZE - 1);
 
-          supabase
-            .from("recurring_schedules")
-            .select("id,name,kind,amount_paisa")
-            .eq("user_id", userId),
-      ]);
+        if (transactionError) throw transactionError;
 
-    if (transactionRows.error) throw transactionRows.error;
-    if (occurrenceRows.error) throw occurrenceRows.error;
-    if (scheduleRows.error) throw scheduleRows.error;
+        const page = (data ?? []) as Transaction[];
+        loadedTransactions.push(...page);
 
-    return {
-      transactions: (transactionRows.data ?? []) as unknown as Transaction[],
-      occurrences: (occurrenceRows.data ?? []) as unknown as Occurrence[],
-      schedules: (scheduleRows.data ?? []) as unknown as Schedule[],
-    };
-  }, [userId, openingBalanceDate]);
+        if (page.length < PAGE_SIZE) break;
+      }
+
+      const loadedOccurrences: ScheduleOccurrence[] = [];
+
+      for (let from = 0; ; from += PAGE_SIZE) {
+        const { data, error: occurrenceError } = await supabase
+          .from("schedule_occurrences")
+          .select("id,schedule_id,due_date,status,transaction_id")
+          .eq("user_id", userId)
+          .gte("due_date", openingBalanceDate)
+          .lte("due_date", horizonEnd)
+          .order("due_date", { ascending: true })
+          .range(from, from + PAGE_SIZE - 1);
+
+        if (occurrenceError) throw occurrenceError;
+
+        const page = (data ?? []) as ScheduleOccurrence[];
+        loadedOccurrences.push(...page);
+
+        if (page.length < PAGE_SIZE) break;
+      }
+
+      const { data: scheduleData, error: scheduleError } = await supabase
+        .from("recurring_schedules")
+        .select("id,name,kind,amount_paisa")
+        .eq("user_id", userId);
+
+      if (scheduleError) throw scheduleError;
+
+      return {
+        transactions: loadedTransactions,
+        occurrences: loadedOccurrences,
+        schedules: (scheduleData ?? []) as unknown as Schedule[],
+      };
+  }, [userId, openingBalanceDate, horizonEnd]);
 
   useEffect(() => {
     let active = true;
@@ -172,8 +252,11 @@ export default function CalendarForecast({
         }
       } catch (err) {
         if (active) {
+          console.error("Failed to load calendar data:", err);
           setError(
-            err instanceof Error ? err.message : "Could not load calendar data.",
+            err instanceof Error
+              ? err.message
+              : "Could not load calendar and forecast data.",
           );
         }
       } finally {
@@ -185,379 +268,649 @@ export default function CalendarForecast({
     return () => { active = false; };
   }, [loadData, refreshKey]);
 
-  const scheduleById = useMemo(
-    () => new Map(schedules.map((schedule) => [schedule.id, schedule])),
-    [schedules],
-  );
+  const scheduleById = useMemo(() => {
+    return new Map(schedules.map((schedule) => [schedule.id, schedule]));
+  }, [schedules]);
 
-  const transactionEntries = useMemo<CalendarEntry[]>(
-    () =>
-      transactions.map((transaction) => ({
-        id: `transaction-${transaction.id}`,
-        date: transaction.transaction_date,
-        title: transaction.description,
-        kind: transaction.kind,
-        amount: safeAmount(transaction.amount_paisa),
-        type: "transaction",
-      })),
-    [transactions],
-  );
+  const transactionEntries = useMemo<CalendarEntry[]>(() => {
+    return transactions.map((transaction) => ({
+      id: transaction.id,
+      date: transaction.transaction_date,
+      description: transaction.description,
+      kind: transaction.kind,
+      amount: safeAmount(transaction.amount_paisa),
+      type: "transaction",
+      source: transaction.source,
+    }));
+  }, [transactions]);
 
-  const scheduledEntries = useMemo<CalendarEntry[]>(
-    () =>
-      occurrences
-        .filter((occurrence) => occurrence.status === "pending")
-        .flatMap((occurrence) => {
-          const schedule = scheduleById.get(occurrence.schedule_id);
-          if (!schedule) return [];
+  // Pending occurrences are forecast items, not completed transactions.
+  const scheduledEntries = useMemo<CalendarEntry[]>(() => {
+    return occurrences.flatMap((occurrence) => {
+      if (occurrence.status !== "pending") return [];
 
-          return [{
-            id: `occurrence-${occurrence.id}`,
-            date: occurrence.due_date,
-            title: schedule.name,
-            kind: schedule.kind,
-            amount: safeAmount(schedule.amount_paisa),
-            type: "scheduled" as const,
-            status: occurrence.status,
-          }];
-        }),
-    [occurrences, scheduleById],
-  );
+      const schedule = scheduleById.get(occurrence.schedule_id);
+      if (!schedule) return [];
+
+      return [
+        {
+          id: occurrence.id,
+          date: occurrence.due_date,
+          description: schedule.name,
+          kind: schedule.kind,
+          amount: safeAmount(schedule.amount_paisa),
+          type: "scheduled" as const,
+        },
+      ];
+    });
+  }, [occurrences, scheduleById]);
 
   const allEntries = useMemo(
     () => [...transactionEntries, ...scheduledEntries],
     [transactionEntries, scheduledEntries],
   );
 
-  const selectedMonthEntries = useMemo(
+  const selectedMonthEntries = useMemo(() => {
+    const monthKey = visibleMonth.slice(0, 7);
+
+    return allEntries
+      .filter(
+        (entry) =>
+          entry.date.startsWith(monthKey) &&
+          entry.date >= openingBalanceDate,
+      )
+      .sort((a, b) => a.date.localeCompare(b.date));
+  }, [allEntries, visibleMonth, openingBalanceDate]);
+
+  // Daily calendar totals combine recorded transactions and pending scheduled
+  // occurrences, so each day provides a compact view of activity and plans.
+  const dailyTotals = useMemo(() => {
+    const totals = new Map<string, DailyTotals>();
+
+    for (const entry of selectedMonthEntries) {
+      const current = totals.get(entry.date) ?? emptyTotals();
+      totals.set(
+        entry.date,
+        addToTotals(current, entry.kind, entry.amount),
+      );
+    }
+
+    return totals;
+  }, [selectedMonthEntries]);
+
+  // Actual balance includes recorded transactions through today.
+  const actualBalance = useMemo(() => {
+    return transactions.reduce((balance, transaction) => {
+      if (
+        transaction.transaction_date < openingBalanceDate ||
+        transaction.transaction_date > today
+      ) {
+        return balance;
+      }
+
+      return addSigned(
+        balance,
+        transaction.kind,
+        safeAmount(transaction.amount_paisa),
+      );
+    }, openingBalance);
+  }, [transactions, openingBalance, openingBalanceDate, today]);
+
+  // Balance at the start of today, before today's recorded transactions.
+  const openingBalanceToday = useMemo(() => {
+    return transactions.reduce((balance, transaction) => {
+      if (
+        transaction.transaction_date < openingBalanceDate ||
+        transaction.transaction_date >= today
+      ) {
+        return balance;
+      }
+
+      return addSigned(
+        balance,
+        transaction.kind,
+        safeAmount(transaction.amount_paisa),
+      );
+    }, openingBalance);
+  }, [transactions, openingBalance, openingBalanceDate, today]);
+
+  // Do not add today's recorded transactions again: actualBalance already
+  // includes them. Pending scheduled occurrences due today remain forecast items.
+  const forecastEntries = useMemo(
     () =>
       allEntries.filter(
         (entry) =>
-          entry.date >= monthStart(selectedMonth) &&
-          entry.date <= monthEnd(selectedMonth),
+          entry.date >= today &&
+          entry.date <= horizonEnd &&
+          !(entry.date === today && entry.type === "transaction"),
       ),
-    [allEntries, selectedMonth],
+    [allEntries, today, horizonEnd],
   );
 
-  const monthTotals = useMemo(() => {
-    let income = 0n;
-    let expense = 0n;
+  const projectedBalanceByDate = useMemo(() => {
+    const entriesByDate = new Map<string, CalendarEntry[]>();
 
-    for (const entry of selectedMonthEntries) {
-      if (entry.kind === "income") income += entry.amount;
-      else expense += entry.amount;
+    for (const entry of forecastEntries) {
+      const existing = entriesByDate.get(entry.date) ?? [];
+      existing.push(entry);
+      entriesByDate.set(entry.date, existing);
     }
 
-    return { income, expense, net: income - expense };
-  }, [selectedMonthEntries]);
+    const result = new Map<string, bigint>();
+    let balance = actualBalance;
+    const cursor = parseDate(today);
+    const lastDate = parseDate(horizonEnd);
 
-  // Actual balance through today, excluding future-dated transactions.
-  const actualBalance = useMemo(() => {
-    let balance = safeAmount(openingBalancePaisa);
+    while (cursor <= lastDate) {
+      const currentDate = dateString(cursor);
 
-    for (const transaction of transactions) {
-      if (
-        transaction.transaction_date >= openingBalanceDate &&
-        transaction.transaction_date <= today
-      ) {
-        balance = addSigned(
+      for (const entry of entriesByDate.get(currentDate) ?? []) {
+        balance = addSigned(balance, entry.kind, entry.amount);
+      }
+
+      result.set(currentDate, balance);
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    return result;
+  }, [forecastEntries, actualBalance, today, horizonEnd]);
+
+  const calendarCells = useMemo(() => {
+    const firstDate = parseDate(monthStart(visibleMonth));
+    const lastDate = parseDate(monthEnd(visibleMonth));
+    const firstWeekday = firstDate.getDay();
+    const weekOffset =
+      (firstWeekday - getWeekdayIndex(weekStartsOn) + 7) % 7;
+    const cells: Array<string | null> = [];
+
+    for (let index = 0; index < weekOffset; index++) {
+      cells.push(null);
+    }
+
+    const cursor = new Date(firstDate);
+
+    while (cursor <= lastDate) {
+      cells.push(dateString(cursor));
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    while (cells.length % 7 !== 0) {
+      cells.push(null);
+    }
+
+    return cells;
+  }, [visibleMonth, weekStartsOn]);
+
+  const weekdayHeaders = useMemo(() => {
+    const startIndex = getWeekdayIndex(weekStartsOn);
+
+    return WEEKDAY_LABELS.map(
+      (_, index) => WEEKDAY_LABELS[(startIndex + index) % 7],
+    );
+  }, [weekStartsOn]);
+
+  const selectedDayEntries = useMemo(() => {
+    return allEntries
+      .filter((entry) => entry.date === selectedDate)
+      .sort((a, b) => {
+        if (a.type !== b.type) {
+          return a.type === "transaction" ? -1 : 1;
+        }
+
+        return a.description.localeCompare(b.description);
+      });
+  }, [allEntries, selectedDate]);
+
+  const selectedActualTransactions = useMemo(
+    () =>
+      transactions.filter(
+        (transaction) => transaction.transaction_date === selectedDate,
+      ),
+    [transactions, selectedDate],
+  );
+
+  const selectedScheduledEntries = useMemo(
+    () => selectedDayEntries.filter((entry) => entry.type === "scheduled"),
+    [selectedDayEntries],
+  );
+
+  const selectedActualTotals = useMemo(() => {
+    return selectedActualTransactions.reduce(
+      (totals, transaction) =>
+        addToTotals(
+          totals,
+          transaction.kind,
+          safeAmount(transaction.amount_paisa),
+        ),
+      emptyTotals(),
+    );
+  }, [selectedActualTransactions]);
+
+  const selectedScheduledTotals = useMemo(() => {
+    return selectedScheduledEntries.reduce(
+      (totals, entry) => addToTotals(totals, entry.kind, entry.amount),
+      emptyTotals(),
+    );
+  }, [selectedScheduledEntries]);
+
+  const selectedOpeningBalance = useMemo(() => {
+    if (selectedDate < openingBalanceDate) return null;
+
+    if (selectedDate === today) return openingBalanceToday;
+
+    if (selectedDate < today) {
+      return transactions.reduce((balance, transaction) => {
+        if (
+          transaction.transaction_date < openingBalanceDate ||
+          transaction.transaction_date >= selectedDate
+        ) {
+          return balance;
+        }
+
+        return addSigned(
           balance,
           transaction.kind,
           safeAmount(transaction.amount_paisa),
         );
-      }
+      }, openingBalance);
     }
 
-    return balance;
-  }, [
-    transactions,
-    openingBalancePaisa,
-    openingBalanceDate,
-    today,
-  ]);
-
-  // Forecast from today onward: future-dated recorded transactions plus
-  // pending occurrences. Paid occurrences are not added again.
-  const forecast = useMemo(() => {
-    const horizon = Math.min(
-      60,
-      Math.max(1, Math.trunc(forecastHorizonMonths || 1)),
-    );
-    const horizonEnd = dateString(
+    const previousDate = dateString(
       new Date(
-        new Date().getFullYear(),
-        new Date().getMonth() + horizon,
-        new Date().getDate(),
+        parseDate(selectedDate).getFullYear(),
+        parseDate(selectedDate).getMonth(),
+        parseDate(selectedDate).getDate() - 1,
       ),
     );
 
-    const futureEntries = allEntries.filter(
-      (entry) => entry.date > today && entry.date <= horizonEnd,
-    );
+    if (previousDate < today) return actualBalance;
 
-    const byDate = new Map<string, CalendarEntry[]>();
+    return projectedBalanceByDate.get(previousDate) ?? null;
+  }, [
+    selectedDate,
+    openingBalanceDate,
+    today,
+    openingBalanceToday,
+    transactions,
+    openingBalance,
+    actualBalance,
+    projectedBalanceByDate,
+  ]);
 
-    for (const entry of futureEntries) {
-      const existing = byDate.get(entry.date) ?? [];
-      existing.push(entry);
-      byDate.set(entry.date, existing);
+  const selectedActualClosingBalance = useMemo(() => {
+    if (
+      selectedDate < openingBalanceDate ||
+      selectedDate > today
+    ) {
+      return null;
     }
 
-    const days: { date: string; balance: bigint }[] = [];
-    let balance = actualBalance;
-    let day = parseDate(today);
-    const lastDay = parseDate(horizonEnd);
-
-    while (day <= lastDay) {
-      const key = dateString(day);
-
-      for (const entry of byDate.get(key) ?? []) {
-        balance = addSigned(balance, entry.kind, entry.amount);
+    return transactions.reduce((balance, transaction) => {
+      if (
+        transaction.transaction_date < openingBalanceDate ||
+        transaction.transaction_date > selectedDate
+      ) {
+        return balance;
       }
 
-      days.push({ date: key, balance });
-      day = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1);
-    }
-
-    return {
-      horizonEnd,
-      endingBalance: balance,
-      futureEntries,
-      days,
-    };
-  }, [allEntries, actualBalance, today, forecastHorizonMonths]);
-
-  const projectedBalanceByDate = useMemo(
-    () => new Map(forecast.days.map((day) => [day.date, day.balance])),
-    [forecast.days],
-  );
-
-  const calendarCells = useMemo(() => {
-    const first = parseDate(monthStart(selectedMonth));
-    const last = parseDate(monthEnd(selectedMonth));
-    const offset =
-      (first.getDay() - getWeekdayIndex(weekStartsOn) + 7) % 7;
-    const cells: (string | null)[] = Array(offset).fill(null);
-
-    for (let day = 1; day <= last.getDate(); day++) {
-      cells.push(
-        dateString(
-          new Date(selectedMonth.getFullYear(), selectedMonth.getMonth(), day),
-        ),
+      return addSigned(
+        balance,
+        transaction.kind,
+        safeAmount(transaction.amount_paisa),
       );
-    }
+    }, openingBalance);
+  }, [
+    transactions,
+    openingBalance,
+    openingBalanceDate,
+    selectedDate,
+    today,
+  ]);
 
-    while (cells.length % 7 !== 0) cells.push(null);
-    return cells;
-  }, [selectedMonth, weekStartsOn]);
+  const selectedProjectedBalance =
+    projectedBalanceByDate.get(selectedDate) ?? null;
 
-  const weekdayLabels = useMemo(() => {
-    const labels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
-    const start = getWeekdayIndex(weekStartsOn);
-    return [...labels.slice(start), ...labels.slice(0, start)];
-  }, [weekStartsOn]);
+  const canShowProjection =
+    selectedDate >= today && selectedDate <= horizonEnd;
 
-  function entriesForDate(date: string): CalendarEntry[] {
-    return selectedMonthEntries
-      .filter((entry) => entry.date === date)
-      .sort((a, b) => {
-        if (a.type !== b.type) return a.type === "scheduled" ? -1 : 1;
-        return a.title.localeCompare(b.title);
-      });
+  function goToMonth(amount: number) {
+    const nextMonth = shiftMonth(visibleMonth, amount);
+    setVisibleMonth(nextMonth);
+    setSelectedDate(nextMonth);
+  }
+
+  function selectDay(date: string) {
+    setSelectedDate(date);
+  }
+
+  if (loading) {
+    return (
+      <section className="cf-container">
+        <p className="cf-status">Loading calendar and forecast…</p>
+      </section>
+    );
   }
 
   return (
-    <section className="calendar-forecast">
-      <div className="calendar-heading">
+    <section className="cf-container">
+      <div className="cf-header">
         <div>
           <h2>Calendar &amp; Cash-Flow Forecast</h2>
-          <p>Recorded transactions and pending scheduled payments.</p>
+          <p>
+            See daily income, expenses, and how your balance may change.
+          </p>
         </div>
+
         <button
           type="button"
+          className="cf-refresh-button"
           onClick={() => {
             setError("");
             setLoading(true);
             setRefreshKey((key) => key + 1);
           }}
-          disabled={loading}
         >
-          {loading ? "Loading…" : "Refresh"}
+          Refresh
         </button>
       </div>
 
-      {error && <p className="cf-error">{error}</p>}
-
-      <div className="cf-summary-grid">
-        <article className="cf-summary">
-          <span>Actual balance through today</span>
-          <strong>{moneyTotal(actualBalance)}</strong>
-        </article>
-        <article className="cf-summary">
-          <span>Selected month income</span>
-          <strong className="cf-income">{moneyTotal(monthTotals.income)}</strong>
-        </article>
-        <article className="cf-summary">
-          <span>Selected month expenses</span>
-          <strong className="cf-expense">{moneyTotal(monthTotals.expense)}</strong>
-        </article>
-        <article className="cf-summary">
-          <span>Selected month net</span>
-          <strong>{moneyTotal(monthTotals.net)}</strong>
-        </article>
-      </div>
-
-      <section className="cf-panel">
-        <div className="cf-month-nav">
+      {error && (
+        <div className="cf-error" role="alert">
+          <span>{error}</span>
           <button
             type="button"
-            aria-label="Previous month"
-            onClick={() => setSelectedMonth((month) => shiftMonth(month, -1))}
+            onClick={() => {
+              setError("");
+              setLoading(true);
+              setRefreshKey((key) => key + 1);
+            }}
           >
-            ←
-          </button>
-          <h3>{monthLabel(selectedMonth)}</h3>
-          <button
-            type="button"
-            aria-label="Next month"
-            onClick={() => setSelectedMonth((month) => shiftMonth(month, 1))}
-          >
-            →
+            Try again
           </button>
         </div>
+      )}
 
-        {loading ? (
-          <p>Loading calendar…</p>
+      <div className="cf-legend">
+        <span className="cf-legend-income">Income</span>
+        <span className="cf-legend-expense">Expense</span>
+        <span className="cf-legend-projected">Projected balance</span>
+      </div>
+
+      <div className="cf-month-navigation">
+        <button
+          type="button"
+          aria-label="Previous month"
+          onClick={() => goToMonth(-1)}
+        >
+          ‹
+        </button>
+
+        <h3>{monthLabel(visibleMonth)}</h3>
+
+        <button
+          type="button"
+          aria-label="Next month"
+          onClick={() => goToMonth(1)}
+        >
+          ›
+        </button>
+
+        <button
+          type="button"
+          className="cf-today-button"
+          onClick={() => {
+            setVisibleMonth(initialMonth);
+            setSelectedDate(today);
+          }}
+        >
+          Today
+        </button>
+      </div>
+
+      <div className="cf-calendar-grid">
+        {weekdayHeaders.map((day) => (
+          <div className="cf-weekday" key={day}>
+            {day}
+          </div>
+        ))}
+
+        {calendarCells.map((date, index) => {
+          if (!date) {
+            return (
+              <div
+                className="cf-day cf-empty-day"
+                key={`empty-${index}`}
+                aria-hidden="true"
+              />
+            );
+          }
+
+          const totals = dailyTotals.get(date) ?? emptyTotals();
+          const projected = projectedBalanceByDate.get(date);
+          const isSelected = date === selectedDate;
+          const isToday = date === today;
+          const isBeforeOpening = date < openingBalanceDate;
+          const hasEntries =
+            totals.income > 0n || totals.expense > 0n;
+
+          return (
+            <button
+              type="button"
+              className={[
+                "cf-day",
+                isSelected ? "cf-day-selected" : "",
+                isToday ? "cf-day-today" : "",
+                isBeforeOpening ? "cf-day-before-opening" : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              key={date}
+              onClick={() => selectDay(date)}
+              aria-pressed={isSelected}
+              aria-label={`${fullDateLabel(date)}. Income ${moneyTotal(
+                totals.income,
+              )}, expense ${moneyTotal(totals.expense)}${projected !== undefined
+                  ? `, projected balance ${moneyTotal(projected)}`
+                  : ""
+                }. Click to view details.`}
+            >
+              <span className="cf-day-number">
+                {parseDate(date).getDate()}
+                {isToday && <span className="cf-today-dot" />}
+              </span>
+
+              {totals.income > 0n && (
+                <span className="cf-daily-total cf-daily-income">
+                  <span>Income</span>
+                  <strong>+{moneyTotal(totals.income)}</strong>
+                </span>
+              )}
+
+              {totals.expense > 0n && (
+                <span className="cf-daily-total cf-daily-expense">
+                  <span>Expense</span>
+                  <strong>−{moneyTotal(totals.expense)}</strong>
+                </span>
+              )}
+
+              {projected !== undefined && (
+                <span className="cf-projected">
+                  <span>Projected</span>
+                  <strong>{moneyTotal(projected)}</strong>
+                </span>
+              )}
+
+              {!hasEntries && projected === undefined && (
+                <span className="cf-no-activity">No activity</span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      <p className="cf-calendar-help">
+        Select any day to view its opening balance, detailed transactions,
+        actual closing balance, and projected closing balance when available.
+      </p>
+
+      <section className="cf-detail-card" aria-live="polite">
+        <div className="cf-detail-header">
+          <div>
+            <p className="cf-detail-eyebrow">Selected day</p>
+            <h3>{fullDateLabel(selectedDate)}</h3>
+          </div>
+
+          {selectedDate === today && (
+            <span className="cf-date-badge">Today</span>
+          )}
+        </div>
+
+        {selectedDate < openingBalanceDate ? (
+          <div className="cf-empty-state">
+            This date is before your opening-balance date (
+            {fullDateLabel(openingBalanceDate)}). No balance can be calculated
+            from the configured opening balance for this day.
+          </div>
         ) : (
-          <div className="cf-calendar">
-            {weekdayLabels.map((label) => (
-              <div className="cf-weekday" key={label}>{label}</div>
-            ))}
+          <>
+            <div className="cf-balance-summary">
+              <div className="cf-balance-tile">
+                <span>Opening balance</span>
+                <strong>
+                  {selectedOpeningBalance === null
+                    ? "—"
+                    : moneyTotal(selectedOpeningBalance)}
+                </strong>
+              </div>
 
-            {calendarCells.map((date, index) => {
-              if (!date) {
-                return <div className="cf-day cf-empty" key={`empty-${index}`} />;
-              }
+              <div className="cf-balance-tile cf-balance-actual">
+                <span>Actual closing balance</span>
+                <strong>
+                  {selectedActualClosingBalance === null
+                    ? "Not available"
+                    : moneyTotal(selectedActualClosingBalance)}
+                </strong>
+                <small>
+                  {selectedDate > today
+                    ? "Future date"
+                    : "Based on recorded transactions"}
+                </small>
+              </div>
 
-              const entries = entriesForDate(date);
-              const isToday = date === today;
-              const projected = projectedBalanceByDate.get(date);
+              <div className="cf-balance-tile cf-balance-projection">
+                <span>Projected closing balance</span>
+                <strong>
+                  {selectedProjectedBalance === null
+                    ? "Outside forecast range"
+                    : moneyTotal(selectedProjectedBalance)}
+                </strong>
+                <small>
+                  {canShowProjection
+                    ? "Includes pending scheduled items"
+                    : `Forecast horizon: ${forecastHorizonMonths} month(s)`}
+                </small>
+              </div>
+            </div>
 
-              return (
-                <div
-                  className={`cf-day${isToday ? " cf-today" : ""}`}
-                  key={date}
-                >
-                  <div className="cf-day-number">{parseDate(date).getDate()}</div>
+            <div className="cf-day-totals">
+              <div className="cf-total-line">
+                <span>Recorded income</span>
+                <strong className="cf-text-income">
+                  +{moneyTotal(selectedActualTotals.income)}
+                </strong>
+              </div>
 
-                  {entries.slice(0, 3).map((entry) => (
+              <div className="cf-total-line">
+                <span>Recorded expenses</span>
+                <strong className="cf-text-expense">
+                  −{moneyTotal(selectedActualTotals.expense)}
+                </strong>
+              </div>
+
+              <div className="cf-total-line">
+                <span>Scheduled income (pending)</span>
+                <strong className="cf-text-income">
+                  +{moneyTotal(selectedScheduledTotals.income)}
+                </strong>
+              </div>
+
+              <div className="cf-total-line">
+                <span>Scheduled expenses (pending)</span>
+                <strong className="cf-text-expense">
+                  −{moneyTotal(selectedScheduledTotals.expense)}
+                </strong>
+              </div>
+            </div>
+
+            <div className="cf-detail-section">
+              <div className="cf-section-heading">
+                <h4>Income &amp; expense details</h4>
+                <span>
+                  {selectedActualTransactions.length} recorded ·{" "}
+                  {selectedScheduledEntries.length} scheduled
+                </span>
+              </div>
+
+              {selectedDayEntries.length === 0 ? (
+                <div className="cf-empty-state">
+                  No recorded transactions or pending scheduled items for this
+                  day.
+                </div>
+              ) : (
+                <div className="cf-transaction-list">
+                  {selectedDayEntries.map((entry) => (
                     <div
-                      className={`cf-event ${entry.kind === "income" ? "cf-event-income" : "cf-event-expense"
-                        } ${entry.type === "scheduled" ? "cf-event-pending" : ""}`}
-                      key={entry.id}
-                      title={`${entry.title}: ${moneyTotal(entry.amount)}`}
+                      className="cf-transaction-row"
+                      key={`${entry.type}-${entry.id}`}
                     >
-                      <span>{entry.type === "scheduled" ? "◷ " : ""}{entry.title}</span>
-                      <strong>
-                        {entry.kind === "expense" ? "−" : "+"}
+                      <div className="cf-transaction-main">
+                        <span
+                          className={[
+                            "cf-kind-indicator",
+                            entry.kind === "income"
+                              ? "cf-kind-income"
+                              : "cf-kind-expense",
+                          ].join(" ")}
+                          aria-hidden="true"
+                        />
+
+                        <div className="cf-transaction-description">
+                          <strong>{entry.description}</strong>
+                          <span>
+                            {entry.type === "scheduled"
+                              ? "Scheduled · Pending"
+                              : `Recorded transaction${entry.source
+                                ? ` · ${entry.source.replaceAll("_", " ")}`
+                                : ""
+                              }`}
+                          </span>
+                        </div>
+                      </div>
+
+                      <strong
+                        className={
+                          entry.kind === "income"
+                            ? "cf-text-income"
+                            : "cf-text-expense"
+                        }
+                      >
+                        {entry.kind === "income" ? "+" : "−"}
                         {moneyTotal(entry.amount)}
                       </strong>
                     </div>
                   ))}
-
-                  {entries.length > 3 && (
-                    <small>+{entries.length - 3} more</small>
-                  )}
-
-                  {projected !== undefined && (
-                    <div className="cf-projected">
-                      Projected: {moneyTotal(projected)}
-                    </div>
-                  )}
                 </div>
-              );
-            })}
-          </div>
-        )}
-
-        <div className="cf-legend">
-          <span><i className="cf-legend-income" /> Income</span>
-          <span><i className="cf-legend-expense" /> Expense</span>
-          <span><i className="cf-legend-pending" /> Pending schedule</span>
-        </div>
-      </section>
-
-      <section className="cf-panel">
-        <h3>Cash-flow forecast</h3>
-        <p>
-          From today through {forecast.horizonEnd} (
-          {Math.min(60, Math.max(1, Math.trunc(forecastHorizonMonths || 1)))} months).
-        </p>
-
-        <div className="cf-forecast-result">
-          <span>Projected ending balance</span>
-          <strong>{moneyTotal(forecast.endingBalance)}</strong>
-        </div>
-
-        <h4>Upcoming projected events</h4>
-
-        {forecast.futureEntries.length === 0 ? (
-          <p>No future transactions or pending occurrences in this forecast window.</p>
-        ) : (
-          <div className="cf-upcoming-list">
-            {[...forecast.futureEntries]
-              .sort((a, b) => a.date.localeCompare(b.date))
-              .map((entry) => (
-                <div className="cf-upcoming-row" key={entry.id}>
-                  <div>
-                    <strong>{entry.title}</strong>
-                    <small>
-                      {entry.date} ·{" "}
-                      {entry.type === "scheduled"
-                        ? "Pending schedule"
-                        : "Recorded transaction"}
-                    </small>
-                  </div>
-                  <strong className={entry.kind === "income" ? "cf-income" : "cf-expense"}>
-                    {entry.kind === "expense" ? "−" : "+"}
-                    {moneyTotal(entry.amount)}
-                  </strong>
-                </div>
-              ))}
-          </div>
+              )}
+            </div>
+          </>
         )}
       </section>
 
-      <section className="cf-panel">
-        <h3>Selected month details</h3>
-
-        {selectedMonthEntries.length === 0 ? (
-          <p>No transactions or pending occurrences in this month.</p>
-        ) : (
-          <div className="cf-upcoming-list">
-            {selectedMonthEntries
-              .slice()
-              .sort((a, b) => a.date.localeCompare(b.date))
-              .map((entry) => (
-                <div className="cf-upcoming-row" key={entry.id}>
-                  <div>
-                    <strong>{entry.title}</strong>
-                    <small>
-                      {entry.date} ·{" "}
-                      {entry.type === "scheduled"
-                        ? "Pending schedule"
-                        : "Recorded transaction"}
-                    </small>
-                  </div>
-                  <strong className={entry.kind === "income" ? "cf-income" : "cf-expense"}>
-                    {entry.kind === "expense" ? "−" : "+"}
-                    {moneyTotal(entry.amount)}
-                  </strong>
-                </div>
-              ))}
-          </div>
-        )}
-      </section>
+      <p className="cf-footnote">
+        Projected balances are estimates, not confirmed bank balances. Pending
+        scheduled occurrences are included in projections until their status
+        changes. Recorded transactions affect actual balances.
+      </p>
     </section>
   );
 }
