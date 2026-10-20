@@ -708,7 +708,6 @@ button:disabled {
   }
 }
 
-
 /* Settings management */
 
 .settings-panel {
@@ -743,6 +742,174 @@ button:disabled {
 
 @media (max-width: 600px) {
   .settings-form .primary-button {
+    width: 100%;
+  }
+}
+
+/* Recurring schedules */
+
+.recurring-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.recurring-heading,
+.recurring-list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.recurring-heading h2,
+.recurring-list-heading h3 {
+  margin: 0;
+}
+
+.recurring-heading p {
+  margin-bottom: 0;
+}
+
+.recurring-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid #d8dce3;
+  border-radius: 10px;
+}
+
+.recurring-form h3 {
+  margin: 0;
+}
+
+.recurring-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.recurring-form .field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.recurring-form input,
+.recurring-form select,
+.recurring-form textarea {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+
+.recurring-actions,
+.recurring-item-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.recurring-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.recurring-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 16px;
+  border: 1px solid #d8dce3;
+  border-radius: 10px;
+}
+
+.recurring-item-main {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+.recurring-item-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.recurring-amount {
+  font-size: 1.1rem;
+  overflow-wrap: anywhere;
+}
+
+.recurring-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  color: #626977;
+  font-size: 0.9rem;
+}
+
+.recurring-notes {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.recurring-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+}
+
+.recurring-toggle input {
+  width: auto;
+  margin: 0;
+}
+
+.schedule-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 0.8rem;
+  text-transform: capitalize;
+}
+
+.status-active {
+  background: #e8f5eb;
+  color: #22683a;
+}
+
+.status-paused {
+  background: #fff2d9;
+  color: #805900;
+}
+
+.status-ended {
+  background: #f1f2f4;
+  color: #5d6470;
+}
+
+@media (max-width: 700px) {
+  .recurring-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .recurring-item {
+    flex-direction: column;
+  }
+
+  .recurring-item-actions {
     width: 100%;
   }
 }
