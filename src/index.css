@@ -1,7 +1,12 @@
-
 :root {
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
-    "Segoe UI", sans-serif;
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
   color: #172033;
   background: #f5f7fb;
   font-synthesis: none;
@@ -232,7 +237,6 @@ code {
   }
 }
 
-
 select,
 textarea {
   width: 100%;
@@ -348,7 +352,6 @@ button:disabled {
   }
 }
 
-
 .action-buttons {
   display: flex;
   flex-wrap: wrap;
@@ -397,7 +400,6 @@ button:disabled {
     min-width: 210px;
   }
 }
-
 
 .import-panel {
   margin-top: 24px;
@@ -499,7 +501,6 @@ button:disabled {
   }
 }
 
-
 .import-mapping {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -535,5 +536,174 @@ button:disabled {
 @media (max-width: 650px) {
   .import-mapping {
     grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Category management */
+
+.categories-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.category-create-form {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid #d8dce3;
+  border-radius: 10px;
+}
+
+.category-create-form .field-label,
+.category-rename-form .field-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.category-create-form input,
+.category-create-form select,
+.category-rename-form input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+
+.category-management-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.category-management-toolbar h3 {
+  margin: 0;
+}
+
+.category-inactive-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.9rem;
+}
+
+.category-inactive-toggle input {
+  width: auto;
+  margin: 0;
+}
+
+.category-management-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.category-management-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 14px;
+  border: 1px solid #d8dce3;
+  border-radius: 10px;
+}
+
+.category-management-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.category-management-badges {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.category-status-inactive {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: #f1f2f4;
+  color: #5d6470;
+  font-size: 0.8rem;
+}
+
+.category-inactive {
+  opacity: 0.75;
+  background: #fafafa;
+}
+
+.category-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.category-rename-form {
+  display: flex;
+  flex: 1;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-width: 0;
+}
+
+.category-rename-form .field-label {
+  flex: 1;
+  min-width: 180px;
+}
+
+.danger-button {
+  padding: 8px 12px;
+  border: 1px solid #d9a2a2;
+  border-radius: 8px;
+  background: #fff5f5;
+  color: #a12626;
+  cursor: pointer;
+  font: inherit;
+}
+
+.danger-button:hover:not(:disabled) {
+  background: #ffe8e8;
+}
+
+.danger-button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+@media (max-width: 700px) {
+  .category-create-form {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .category-management-item {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .category-actions {
+    width: 100%;
+  }
+
+  .category-rename-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .category-rename-form .field-label {
+    min-width: 0;
   }
 }

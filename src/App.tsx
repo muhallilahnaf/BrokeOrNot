@@ -5,6 +5,7 @@ import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./lib/supabase";
 import "./index.css";
 import Transactions from "./components/Transactions";
+import Categories from "./components/Categories";
 
 type Category = {
   id: string;
@@ -207,6 +208,26 @@ export default function App() {
     if (error) setError(error.message);
   }
 
+  async function refreshCategories(): Promise<void> {
+    const userId = session?.user.id;
+
+    if (!userId) return;
+
+    const { data, error } = await supabase
+      .from("categories")
+      .select("id, name, kind, is_active")
+      .eq("user_id", userId)
+      .order("kind")
+      .order("name");
+
+    if (error) {
+      setError(`Could not refresh categories: ${error.message}`);
+      return;
+    }
+
+    setCategories(data ?? []);
+  }
+
   async function checkOtherUserReadIsolation() {
     if (!session) return;
 
@@ -395,36 +416,20 @@ export default function App() {
             </article>
           </section>
 
-          <section className="panel">
-            <h2>Your categories</h2>
 
-            {categories.length === 0 ? (
-              <p className="muted">
-                No categories found. Check the initialization trigger.
-              </p>
-            ) : (
-              <ul className="category-list">
-                {categories.map((category) => (
-                  <li key={category.id}>
-                    <span>{category.name}</span>
-                    <span className="pill">
-                      {category.kind === "income"
-                        ? "Income"
-                        : "Expense"}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
 
           {settings && (
-            <Transactions
-              userId={session.user.id}
-              openingBalancePaisa={settings.opening_balance_paisa}
-              openingBalanceDate={settings.opening_balance_date}
-              categories={categories}
-            />
+            <>
+              <Categories
+                userId={session.user.id}
+                categories={categories}
+                onCategoriesChanged={refreshCategories} />
+              <Transactions
+                userId={session.user.id}
+                openingBalancePaisa={settings.opening_balance_paisa}
+                openingBalanceDate={settings.opening_balance_date}
+                categories={categories} />
+            </>
           )}
 
           <section className="panel">
