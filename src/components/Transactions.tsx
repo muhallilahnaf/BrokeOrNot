@@ -7,6 +7,7 @@ import {
     getLocalDateString,
     parseTakaToPaisa,
 } from "../lib/money";
+import { ImportTransactions } from "./ImportTransactions";
 
 type Category = {
     id: string;
@@ -31,7 +32,6 @@ type Props = {
     openingBalancePaisa: string | number;
     openingBalanceDate: string;
     categories: Category[];
-    refreshKey: number;
 };
 
 const PAGE_SIZE = 1000;
@@ -41,7 +41,6 @@ export default function Transactions({
     openingBalancePaisa,
     openingBalanceDate,
     categories,
-    refreshKey
 }: Props) {
     const [kind, setKind] = useState<"expense" | "income">("expense");
     const [date, setDate] = useState(getLocalDateString());
@@ -71,6 +70,11 @@ export default function Transactions({
         [categories, kind]
     );
 
+    // Keep the selected value valid without syncing derived state in an effect.
+    const selectedCategoryId = availableCategories.some(
+        (category) => category.id === categoryId
+    ) ? categoryId : (availableCategories[0]?.id ?? "");
+
     const categoryNames = useMemo(
         () => new Map(categories.map((category) => [
             category.id,
@@ -80,10 +84,6 @@ export default function Transactions({
     );
 
     const loadTransactions = useCallback(async () => {
-        setLoading(true);
-        setError("");
-
-        try {
             const allRows: Transaction[] = [];
 
             // Supabase can cap individual responses. Fetch in pages so
@@ -107,16 +107,7 @@ export default function Transactions({
                 if (page.length < PAGE_SIZE) break;
             }
 
-            setTransactions(allRows);
-        } catch (err) {
-            setError(
-                err instanceof Error
-                    ? err.message
-                    : "Could not load transaction history."
-            );
-        } finally {
-            setLoading(false);
-        }
+            return allRows;
     }, [userId]);
 
 
@@ -202,15 +193,28 @@ export default function Transactions({
 
 
     useEffect(() => {
-        void loadTransactions();
-    }, [loadTransactions, reloadKey, refreshKey]);
+        let active = true;
 
-    useEffect(() => {
-        // Select a valid category when the type changes or categories load.
-        if (!availableCategories.some((c) => c.id === categoryId)) {
-            setCategoryId(availableCategories[0]?.id ?? "");
+        async function refreshTransactions() {
+            try {
+                const rows = await loadTransactions();
+                if (active) setTransactions(rows);
+            } catch (err) {
+                if (active) {
+                    setError(
+                        err instanceof Error
+                            ? err.message
+                            : "Could not load transaction history."
+                    );
+                }
+            } finally {
+                if (active) setLoading(false);
+            }
         }
-    }, [availableCategories, categoryId]);
+
+        void refreshTransactions();
+        return () => { active = false; };
+    }, [loadTransactions, reloadKey]);
 
     const currentBalance = useMemo(() => {
         let balance = BigInt(openingBalancePaisa);
@@ -259,8 +263,7 @@ export default function Transactions({
         }
 
         if (
-            !categoryId ||
-            !availableCategories.some((category) => category.id === categoryId)
+            !selectedCategoryId
         ) {
             setError("Choose a valid category for this transaction.");
             return;
@@ -290,7 +293,7 @@ export default function Transactions({
                 description: description.trim(),
                 kind,
                 amount_paisa: amountPaisa.toString(),
-                category_id: categoryId,
+                category_id: selectedCategoryId,
                 notes: notes.trim() || null,
             };
 
@@ -396,7 +399,7 @@ export default function Transactions({
                     <label htmlFor="transaction-category">Category</label>
                     <select
                         id="transaction-category"
-                        value={categoryId}
+                        value={selectedCategoryId}
                         onChange={(event) => setCategoryId(event.target.value)}
                         required
                         disabled={availableCategories.length === 0}
@@ -470,6 +473,13 @@ export default function Transactions({
                     but are excluded from this balance.
                 </p>
             </section>
+
+            <ImportTransactions
+  userId={userId}
+  openingBalanceDate={openingBalanceDate}
+  categories={categories}
+  onImported={() => setReloadKey((key) => key + 1)}
+/>
 
             <section className="panel">
                 <div className="history-heading">

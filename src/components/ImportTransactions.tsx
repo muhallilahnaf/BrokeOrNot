@@ -1,38 +1,14 @@
 
-import { useMemo, useState } from "react";
+import { useState, type ChangeEvent } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "../lib/supabase";
-import { formatPaisa, parseTakaToPaisa } from "../lib/money";
-
-type Kind = "income" | "expense";
+import { parseTakaToPaisa, formatPaisa } from "../lib/money";
 
 type Category = {
   id: string;
   name: string;
-  kind: Kind;
+  kind: "income" | "expense";
   is_active?: boolean;
-};
-
-type ExistingTransaction = {
-  transaction_date: string;
-  description: string;
-  kind: Kind;
-  amount_paisa: string | number;
-  category_id: string;
-};
-
-type ImportRow = {
-  rowNumber: number;
-  cells: unknown[];
-};
-
-type Mapping = {
-  date: string;
-  description: string;
-  debit: string;
-  credit: string;
-  category: string;
-  notes: string;
 };
 
 type Props = {
@@ -42,9 +18,45 @@ type Props = {
   onImported: () => void;
 };
 
+type Field =
+  | "date"
+  | "description"
+  | "debit"
+  | "credit"
+  | "category"
+  | "notes";
+
+type Mapping = Record<Field, string>;
+
+type TransactionInsert = {
+  transaction_date: string;
+  description: string;
+  kind: "income" | "expense";
+  amount_paisa: string;
+  category_id: string;
+  notes: string | null;
+};
+
+type PreviewRow = {
+  rowNumber: number;
+  transaction: TransactionInsert | null;
+  error: string;
+  duplicate: boolean;
+  duplicateReason: string;
+};
+
 const MAX_FILE_BYTES = 5 * 1024 * 1024;
 const MAX_ROWS = 5000;
 const BATCH_SIZE = 100;
+
+const FIELD_LABELS: Record<Field, string> = {
+  date: "Transaction date",
+  description: "Description",
+  debit: "Debit / withdrawal",
+  credit: "Credit / deposit",
+  category: "Category (optional)",
+  notes: "Notes (optional)",
+};
 
 const EMPTY_MAPPING: Mapping = {
   date: "",
@@ -55,619 +67,756 @@ const EMPTY_MAPPING: Mapping = {
   notes: "",
 };
 
-function cellText(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (value instanceof Date) return value.toISOString().slice(0, 10);
-  return String(value).trim();
+function normalizeHeader(value: unknown): string {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim();
 }
 
-function normalizeHeader(value: string): string {
-  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+function suggestColumn(headers: string[], field: Field): string {
+  const aliases: Record<Field, string[]> = {
+    date: [
+      "date",
+      "transaction date",
+      "txn date",
+      "posting date",
+      "value date",
+    ],
+    description: [
+      "description",
+      "narration",
+      "details",
+      "particulars",
+      "transaction details",
+    ],
+    debit: ["debit", "withdrawal", "withdrawals", "dr", "paid out"],
+    credit: ["credit", "deposit", "deposits", "cr", "paid in"],
+    category: ["category", "transaction category"],
+    notes: ["notes", "remarks", "memo"],
+  };
+
+  const index = headers.findIndex(
+    (header) => aliases[field].includes(normalizeHeader(header))
+  );
+
+  return index === -1 ? "" : String(index);
 }
 
-function guessColumn(
-  headers: string[],
-  terms: string[]
-): string {
-  const index = headers.findIndex((header) => {
-    const normalized = normalizeHeader(header);
-    return terms.includes(normalized);
-  });
-
-  return index < 0 ? "" : String(index);
+function isBlank(value: unknown): boolean {
+  return value === null ||
+    value === undefined ||
+    String(value).trim() === "";
 }
 
-function parseDate(
+function parseAmount(value: unknown): bigint | null {
+  if (isBlank(value)) return null;
+
+  let text = String(value)
+    .trim()
+    .replace(/[৳\s]/g, "");
+
+  // Treat common empty-cell placeholders as no amount.
+  if (["-", "—", "–"].includes(text)) return null;
+
+  // Accept standard thousands separators, e.g. 12,500.75.
+  if (/^\d{1,3}(,\d{3})+(\.\d{1,2})?$/.test(text)) {
+    text = text.replace(/,/g, "");
+  }
+
+  if (!/^\d+(\.\d{1,2})?$/.test(text)) {
+    throw new Error(
+      "Invalid amount. Use digits and at most two decimal places."
+    );
+  }
+
+  const [whole, fraction = ""] = text.split(".");
+  const paisa =
+    BigInt(whole) * 100n + BigInt(fraction.padEnd(2, "0"));
+
+  if (paisa === 0n) return null;
+
+  return parseTakaToPaisa(text);
+}
+
+function parseTransactionDate(
   value: unknown,
-  format: "dmy" | "mdy"
+  dateFormat: "dmy" | "mdy"
 ): string {
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
     const year = value.getFullYear();
     const month = String(value.getMonth() + 1).padStart(2, "0");
     const day = String(value.getDate()).padStart(2, "0");
+
     return `${year}-${month}-${day}`;
   }
 
   if (typeof value === "number" && Number.isFinite(value)) {
     const parts = XLSX.SSF.parse_date_code(value);
-    if (!parts) throw new Error("Invalid Excel date.");
 
-    const year = String(parts.y).padStart(4, "0");
-    const month = String(parts.m).padStart(2, "0");
-    const day = String(parts.d).padStart(2, "0");
-    return `${year}-${month}-${day}`;
+    if (!parts || !parts.y || !parts.m || !parts.d) {
+      throw new Error("Invalid Excel date.");
+    }
+
+    return `${parts.y}-${String(parts.m).padStart(2, "0")}-${String(parts.d).padStart(2, "0")}`;
   }
 
-  const text = cellText(value);
+  const text = String(value ?? "").trim();
+
   let year: number;
   let month: number;
   let day: number;
 
-  const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(text);
+  const iso = text.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+
   if (iso) {
     year = Number(iso[1]);
     month = Number(iso[2]);
     day = Number(iso[3]);
   } else {
-    const separated = /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/.exec(text);
-    if (!separated) {
-      throw new Error("Use YYYY-MM-DD or the selected date format.");
+    const regional = text.match(
+      /^(\d{1,2})[/-](\d{1,2})[/-](\d{4})$/
+    );
+
+    if (!regional) {
+      throw new Error(
+        "Unsupported date. Use YYYY-MM-DD, an Excel date, or the selected regional format."
+      );
     }
 
-    if (format === "dmy") {
-      day = Number(separated[1]);
-      month = Number(separated[2]);
+    const first = Number(regional[1]);
+    const second = Number(regional[2]);
+    year = Number(regional[3]);
+
+    if (dateFormat === "dmy") {
+      day = first;
+      month = second;
     } else {
-      month = Number(separated[1]);
-      day = Number(separated[2]);
+      month = first;
+      day = second;
     }
-    year = Number(separated[3]);
   }
 
-  const date = new Date(Date.UTC(year, month - 1, day));
+  const parsed = new Date(Date.UTC(year, month - 1, day));
 
   if (
     year < 1900 ||
-    year > 2200 ||
-    date.getUTCFullYear() !== year ||
-    date.getUTCMonth() !== month - 1 ||
-    date.getUTCDate() !== day
+    parsed.getUTCFullYear() !== year ||
+    parsed.getUTCMonth() !== month - 1 ||
+    parsed.getUTCDate() !== day
   ) {
     throw new Error("Invalid calendar date.");
   }
 
-  return `${String(year).padStart(4, "0")}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
 }
 
-
-function parseAmount(value: unknown): bigint | null {
-  const text = cellText(value).replace(/[৳,\s]/g, "");
-
-  if (!text) return null;
-
-  if (!/^\d+(?:\.\d{1,2})?$/.test(text)) {
-    throw new Error(
-      "Invalid amount. Use a non-negative amount with up to two decimal places."
-    );
-  }
-
-  // Banks often use 0.00 for the unused debit/credit column.
-  if (/^0+(?:\.0{1,2})?$/.test(text)) {
-    return null;
-  }
-
-  return parseTakaToPaisa(text);
-}
-
-
-function fingerprint(transaction: ExistingTransaction): string {
+// Category is intentionally excluded: a previously categorized
+// transaction should still be flagged as a likely duplicate.
+function fingerprint(transaction: TransactionInsert): string {
   return [
     transaction.transaction_date,
-    transaction.description
-      .trim()
-      .toLowerCase()
-      .replace(/\s+/g, " "),
+    transaction.description.trim().toLocaleLowerCase(),
     transaction.kind,
-    BigInt(transaction.amount_paisa).toString(),
-    transaction.category_id,
+    transaction.amount_paisa,
   ].join("|");
 }
 
-export default function ImportTransactions({
+export function ImportTransactions({
   userId,
   openingBalanceDate,
   categories,
   onImported,
 }: Props) {
-  const [fileName, setFileName] = useState("");
-  const [source, setSource] = useState<"csv_import" | "excel_import">(
-    "csv_import"
-  );
+  const [file, setFile] = useState<File | null>(null);
   const [headers, setHeaders] = useState<string[]>([]);
-  const [rows, setRows] = useState<ImportRow[]>([]);
+  const [rows, setRows] = useState<unknown[][]>([]);
   const [mapping, setMapping] = useState<Mapping>(EMPTY_MAPPING);
   const [dateFormat, setDateFormat] = useState<"dmy" | "mdy">("dmy");
-  const [existing, setExisting] = useState<ExistingTransaction[]>([]);
-  const [existingLoaded, setExistingLoaded] = useState(false);
-  const [allowDuplicates, setAllowDuplicates] = useState(false);
-  const [loadingFile, setLoadingFile] = useState(false);
-  const [importing, setImporting] = useState(false);
-  const [error, setError] = useState("");
+  const [preview, setPreview] = useState<PreviewRow[]>([]);
+  const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [importedCount, setImportedCount] = useState(0);
+  const [failedBatches, setFailedBatches] = useState<string[]>([]);
 
-  const activeCategories = useMemo(
-    () => categories.filter((category) => category.is_active !== false),
-    [categories]
+  const activeCategories = categories.filter(
+    (category) => category.is_active !== false
   );
 
-  const preview = useMemo(() => {
-    const seen = new Set<string>();
-    const existingKeys = new Set(existing.map(fingerprint));
-
-    return rows.map((row) => {
-      const issues: string[] = [];
-      let transaction: {
-        transaction_date: string;
-        description: string;
-        kind: Kind;
-        amount_paisa: string;
-        category_id: string;
-        notes: string | null;
-      } | null = null;
-
-      try {
-        const getCell = (key: keyof Mapping) => {
-          const index = mapping[key];
-          return index === "" ? "" : row.cells[Number(index)];
-        };
-
-        if (mapping.date === "") {
-          throw new Error("Map a date column.");
-        }
-        if (mapping.description === "") {
-          throw new Error("Map a description column.");
-        }
-        if (mapping.debit === "" || mapping.credit === "") {
-          throw new Error("Map both debit and credit columns.");
-        }
-
-        const transactionDate = parseDate(getCell("date"), dateFormat);
-        if (transactionDate < openingBalanceDate) {
-          throw new Error(
-            `Date is before the opening-balance date (${openingBalanceDate}).`
-          );
-        }
-
-        const description = cellText(getCell("description"));
-        if (!description) throw new Error("Description is required.");
-        if (description.length > 240) {
-          throw new Error("Description exceeds 240 characters.");
-        }
-
-        const debit = parseAmount(getCell("debit"));
-        const credit = parseAmount(getCell("credit"));
-
-        if (debit !== null && credit !== null) {
-          throw new Error("Both debit and credit contain amounts.");
-        }
-        if (debit === null && credit === null) {
-          throw new Error("No debit or credit amount was found.");
-        }
-
-        const kind: Kind = debit !== null ? "expense" : "income";
-        const amount = debit ?? credit;
-        if (amount === null) throw new Error("Amount is missing.");
-
-        let category: Category | undefined;
-        const categoryText = cellText(getCell("category"));
-
-        if (categoryText) {
-          category = activeCategories.find(
-            (item) =>
-              item.kind === kind &&
-              item.name.trim().toLowerCase() === categoryText.toLowerCase()
-          );
-
-          if (!category) {
-            throw new Error(
-              `No active ${kind} category matches "${categoryText}".`
-            );
-          }
-        } else {
-          const fallbackName =
-            kind === "income" ? "Other Income" : "Other Expense";
-
-          category = activeCategories.find(
-            (item) =>
-              item.kind === kind &&
-              item.name.trim().toLowerCase() === fallbackName.toLowerCase()
-          );
-
-          if (!category) {
-            throw new Error(
-              `Choose a category column or create the "${fallbackName}" category.`
-            );
-          }
-        }
-
-        const notes = cellText(getCell("notes"));
-        if (notes.length > 5000) {
-          throw new Error("Notes exceed 5,000 characters.");
-        }
-
-        transaction = {
-          transaction_date: transactionDate,
-          description,
-          kind,
-          amount_paisa: amount.toString(),
-          category_id: category.id,
-          notes: notes || null,
-        };
-      } catch (err) {
-        issues.push(
-          err instanceof Error ? err.message : "Invalid transaction."
-        );
-      }
-
-      let duplicateReason = "";
-
-      if (transaction && issues.length === 0) {
-        const key = fingerprint({
-          ...transaction,
-          amount_paisa: transaction.amount_paisa,
-        });
-
-        if (existingKeys.has(key)) {
-          duplicateReason = "Matches an existing transaction.";
-        } else if (seen.has(key)) {
-          duplicateReason = "Duplicate of another row in this file.";
-        }
-
-        seen.add(key);
-      }
-
-      return {
-        rowNumber: row.rowNumber,
-        transaction,
-        issues,
-        duplicateReason,
-      };
-    });
-  }, [
-    rows,
-    mapping,
-    dateFormat,
-    openingBalanceDate,
-    activeCategories,
-    existing,
-  ]);
-
-  const validCount = preview.filter(
-    (row) => row.transaction && row.issues.length === 0
-  ).length;
-
-  const invalidCount = preview.filter(
-    (row) => row.issues.length > 0
-  ).length;
-
-  const duplicateCount = preview.filter(
-    (row) => row.duplicateReason !== ""
-  ).length;
-
-  const importable = preview.filter(
-    (row) =>
-      row.transaction &&
-      row.issues.length === 0 &&
-      (allowDuplicates || !row.duplicateReason)
-  );
-
-  async function loadExistingTransactions() {
-    const result: ExistingTransaction[] = [];
-    const pageSize = 1000;
-
-    for (let from = 0; ; from += pageSize) {
-      const { data, error } = await supabase
-        .from("transactions")
-        .select(
-          "transaction_date, description, kind, amount_paisa, category_id"
-        )
-        .eq("user_id", userId)
-        .gte("transaction_date", openingBalanceDate)
-        .order("transaction_date", { ascending: true })
-        .range(from, from + pageSize - 1);
-
-      if (error) throw error;
-
-      const page = (data ?? []) as ExistingTransaction[];
-      result.push(...page);
-
-      if (page.length < pageSize) break;
-    }
-
-    return result;
+  function resetAnalysis() {
+    setPreview([]);
+    setMessage("");
+    setError("");
+    setImportedCount(0);
+    setFailedBatches([]);
   }
 
-  async function handleFile(file?: File) {
-    setError("");
-    setMessage("");
-    setRows([]);
+  async function handleFileChange(
+    event: ChangeEvent<HTMLInputElement>
+  ) {
+    const input = event.currentTarget;
+    const selected = input.files?.[0];
+
+    resetAnalysis();
+    setFile(null);
     setHeaders([]);
-    setExisting([]);
-    setExistingLoaded(false);
-    setFileName("");
+    setRows([]);
     setMapping(EMPTY_MAPPING);
 
-    if (!file) return;
+    if (!selected) return;
 
-    const extension = file.name.split(".").pop()?.toLowerCase();
+    const extension = selected.name.split(".").pop()?.toLowerCase();
+
     if (!["csv", "xlsx", "xls"].includes(extension ?? "")) {
-      setError("Choose a CSV, XLS, or XLSX file.");
+      setError("Choose a CSV, XLSX, or XLS file.");
+      input.value = "";
       return;
     }
 
-    if (file.size === 0 || file.size > MAX_FILE_BYTES) {
-      setError("The file must be larger than 0 bytes and no bigger than 5 MB.");
+    if (selected.size === 0 || selected.size > MAX_FILE_BYTES) {
+      setError("The file must be non-empty and no larger than 5 MB.");
+      input.value = "";
       return;
     }
-
-    setLoadingFile(true);
 
     try {
-      const buffer = await file.arrayBuffer();
-      const workbook = XLSX.read(buffer, {
+      const workbook = XLSX.read(await selected.arrayBuffer(), {
         type: "array",
         cellDates: true,
       });
 
-      const sheetName = workbook.SheetNames[0];
-      if (!sheetName) throw new Error("The workbook has no worksheets.");
+      const firstSheet = workbook.SheetNames[0];
 
-      const worksheet = workbook.Sheets[sheetName];
+      if (!firstSheet) {
+        throw new Error("The workbook has no worksheets.");
+      }
+
+      const worksheet = workbook.Sheets[firstSheet];
+
       const matrix = XLSX.utils.sheet_to_json<unknown[]>(worksheet, {
         header: 1,
-        raw: true,
         defval: "",
+        raw: true,
         blankrows: false,
       });
 
       if (matrix.length < 2) {
-        throw new Error("The first worksheet needs a header row and data.");
+        throw new Error(
+          "The first worksheet needs a header row and at least one data row."
+        );
       }
 
-      const columnHeaders = matrix[0].map(cellText);
-      if (!columnHeaders.some(Boolean)) {
-        throw new Error("The first row must contain column headers.");
-      }
-
-      const dataRows = matrix.slice(1).filter((cells) =>
-        cells.some((cell) => cellText(cell) !== "")
+      const columnHeaders = matrix[0].map((cell) =>
+        String(cell ?? "").trim()
       );
 
-      if (dataRows.length > MAX_ROWS) {
-        throw new Error(`A maximum of ${MAX_ROWS} transactions is allowed per file.`);
+      if (columnHeaders.every((header) => !header)) {
+        throw new Error("The first row does not contain column headers.");
       }
 
-      const indexedRows = dataRows.map((cells, index) => ({
-        rowNumber: index + 2,
-        cells,
-      }));
+      const dataRows = matrix.slice(1).filter((row) =>
+        row.some((cell) => !isBlank(cell))
+      );
 
-      const inferredMapping: Mapping = {
-        date: guessColumn(columnHeaders, ["date", "transactiondate", "valuedate", "postingdate"]),
-        description: guessColumn(columnHeaders, ["description", "details", "narration", "particulars", "remarks", "payee"]),
-        debit: guessColumn(columnHeaders, ["debit", "withdrawal", "withdrawals", "dr", "paidout"]),
-        credit: guessColumn(columnHeaders, ["credit", "deposit", "deposits", "cr", "paidin"]),
-        category: guessColumn(columnHeaders, ["category", "transactioncategory"]),
-        notes: guessColumn(columnHeaders, ["notes", "note", "memo"]),
-      };
+      if (dataRows.length === 0) {
+        throw new Error("No non-empty transaction rows were found.");
+      }
 
-      setFileName(file.name);
-      setSource(extension === "csv" ? "csv_import" : "excel_import");
+      if (dataRows.length > MAX_ROWS) {
+        throw new Error(
+          `The file exceeds the ${MAX_ROWS.toLocaleString()}-row limit.`
+        );
+      }
+
+      setFile(selected);
       setHeaders(columnHeaders);
-      setRows(indexedRows);
-      setMapping(inferredMapping);
+      setRows(dataRows);
 
-      const existingRows = await loadExistingTransactions();
-      setExisting(existingRows);
-      setExistingLoaded(true);
+      setMapping({
+        date: suggestColumn(columnHeaders, "date"),
+        description: suggestColumn(columnHeaders, "description"),
+        debit: suggestColumn(columnHeaders, "debit"),
+        credit: suggestColumn(columnHeaders, "credit"),
+        category: suggestColumn(columnHeaders, "category"),
+        notes: suggestColumn(columnHeaders, "notes"),
+      });
+
+      setMessage(
+        `Read ${dataRows.length} data rows from worksheet "${firstSheet}". Check the column mapping.`
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Could not read this file.");
-      setRows([]);
-      setHeaders([]);
-    } finally {
-      setLoadingFile(false);
+      setError(
+        err instanceof Error ? err.message : "Could not read the file."
+      );
     }
   }
 
-  async function importTransactions() {
-    setError("");
-    setMessage("");
+  function cell(row: unknown[], field: Field): unknown {
+    const index = mapping[field];
+    return index === "" ? "" : row[Number(index)] ?? "";
+  }
 
-    if (!existingLoaded) {
-      setError("Existing transactions have not finished loading.");
+  async function analyzeFile() {
+    resetAnalysis();
+
+    if (!file || rows.length === 0) {
+      setError("Choose a valid file first.");
       return;
     }
 
-    if (importable.length === 0) {
-      setError("There are no rows eligible for import.");
+    if (
+      mapping.date === "" ||
+      mapping.description === "" ||
+      mapping.debit === "" ||
+      mapping.credit === ""
+    ) {
+      setError("Map the date, description, debit, and credit columns.");
       return;
     }
 
-    const confirmed = window.confirm(
-      `Import ${importable.length} transactions? ` +
-      `${invalidCount} invalid rows and ` +
-      `${allowDuplicates ? 0 : duplicateCount} duplicate-looking rows will be skipped.`
-    );
+    if (mapping.debit === mapping.credit) {
+      setError("Debit and credit must use different columns.");
+      return;
+    }
 
-    if (!confirmed) return;
+    const requiredColumns = [
+      mapping.date,
+      mapping.description,
+      mapping.debit,
+      mapping.credit,
+    ];
 
-    setImporting(true);
-    let inserted = 0;
+    if (new Set(requiredColumns).size !== requiredColumns.length) {
+      setError(
+        "Date, description, debit, and credit must each use a different column."
+      );
+      return;
+    }
+
+    setLoading(true);
 
     try {
-      const records = importable.map((row) => ({
-        user_id: userId,
-        ...row.transaction!,
-        source,
-      }));
+      const existingFingerprints = new Set<string>();
+      const pageSize = 1000;
+      let offset = 0;
 
-      for (let start = 0; start < records.length; start += BATCH_SIZE) {
-        const batch = records.slice(start, start + BATCH_SIZE);
-        const { error } = await supabase.from("transactions").insert(batch);
+      while (true) {
+        const { data, error: queryError } = await supabase
+          .from("transactions")
+          .select(
+            "transaction_date, description, kind, amount_paisa, category_id, notes"
+          )
+          .eq("user_id", userId)
+          .range(offset, offset + pageSize - 1);
 
-        if (error) {
-          throw new Error(
-            `Import stopped after ${inserted} inserted rows. ` +
-            `The next batch failed: ${error.message}. ` +
-            `Review the history before retrying to avoid duplicates.`
+        if (queryError) throw queryError;
+        if (!data || data.length === 0) break;
+
+        for (const item of data) {
+          existingFingerprints.add(
+            fingerprint({
+              transaction_date: item.transaction_date,
+              description: item.description,
+              kind: item.kind,
+              amount_paisa: String(item.amount_paisa),
+              category_id: item.category_id,
+              notes: item.notes,
+            })
           );
         }
 
-        inserted += batch.length;
+        offset += data.length;
+        if (data.length < pageSize) break;
       }
 
-      setMessage(`Successfully imported ${inserted} transactions.`);
-      onImported();
-      setRows([]);
-      setHeaders([]);
-      setFileName("");
-      setExisting([]);
-      setExistingLoaded(false);
+      const seenInFile = new Set<string>();
+
+      const analyzed: PreviewRow[] = rows.map((row, index) => {
+        try {
+          const rawDate = cell(row, "date");
+          const rawDescription = cell(row, "description");
+
+          if (isBlank(rawDate) || isBlank(rawDescription)) {
+            throw new Error("Date and description are required.");
+          }
+
+          const transactionDate = parseTransactionDate(
+            rawDate,
+            dateFormat
+          );
+
+          if (transactionDate < openingBalanceDate) {
+            throw new Error(
+              `Date is before the opening-balance date (${openingBalanceDate}).`
+            );
+          }
+
+          const description = String(rawDescription).trim();
+
+          if (description.length > 240) {
+            throw new Error("Description exceeds 240 characters.");
+          }
+
+          const debit = parseAmount(cell(row, "debit"));
+          const credit = parseAmount(cell(row, "credit"));
+
+          if (debit !== null && credit !== null) {
+            throw new Error(
+              "Both debit and credit contain amounts. Review this row."
+            );
+          }
+
+          if (debit === null && credit === null) {
+            throw new Error(
+              "Neither debit nor credit contains a positive amount."
+            );
+          }
+
+          const kind = credit !== null ? "income" : "expense";
+          const amount = credit ?? debit;
+
+          if (amount === null || amount <= 0n) {
+            throw new Error("The transaction amount must be positive.");
+          }
+
+          const requestedCategory = String(
+            cell(row, "category") ?? ""
+          ).trim();
+
+          let category: Category | undefined;
+
+          if (requestedCategory) {
+            category = activeCategories.find(
+              (item) =>
+                item.kind === kind &&
+                item.name.trim().toLocaleLowerCase() ===
+                  requestedCategory.toLocaleLowerCase()
+            );
+
+            if (!category) {
+              throw new Error(
+                `Category "${requestedCategory}" does not match an active ${kind} category.`
+              );
+            }
+          } else {
+            const defaultName =
+              kind === "income" ? "Other Income" : "Other Expense";
+
+            category = activeCategories.find(
+              (item) =>
+                item.kind === kind &&
+                item.name.trim().toLocaleLowerCase() ===
+                  defaultName.toLocaleLowerCase()
+            );
+          }
+
+          if (!category) {
+            throw new Error(
+              `No suitable ${kind} category found. Map a category column or create the appropriate default category.`
+            );
+          }
+
+          const notes = String(cell(row, "notes") ?? "").trim();
+
+          if (notes.length > 5000) {
+            throw new Error("Notes exceed 5,000 characters.");
+          }
+
+          const transaction: TransactionInsert = {
+            transaction_date: transactionDate,
+            description,
+            kind,
+            amount_paisa: amount.toString(),
+            category_id: category.id,
+            notes: notes || null,
+          };
+
+          const key = fingerprint(transaction);
+          const exists = existingFingerprints.has(key);
+          const repeated = seenInFile.has(key);
+
+          seenInFile.add(key);
+
+          return {
+            rowNumber: index + 2,
+            transaction,
+            error: "",
+            duplicate: exists || repeated,
+            duplicateReason: exists
+              ? "Matches an existing transaction"
+              : repeated
+                ? "Repeated in this file"
+                : "",
+          };
+        } catch (err) {
+          return {
+            rowNumber: index + 2,
+            transaction: null,
+            error: err instanceof Error ? err.message : "Invalid row.",
+            duplicate: false,
+            duplicateReason: "",
+          };
+        }
+      });
+
+      setPreview(analyzed);
+
+      const valid = analyzed.filter(
+        (item) => item.transaction && !item.error
+      );
+      const duplicates = valid.filter((item) => item.duplicate).length;
+      const ready = valid.filter((item) => !item.duplicate).length;
+      const invalid = analyzed.filter((item) => item.error).length;
+
+      setMessage(
+        `Analysis complete: ${ready} ready, ${duplicates} suspected duplicates, ${invalid} invalid rows.`
+      );
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Import failed.");
-      if (inserted > 0) onImported();
+      setError(
+        err instanceof Error ? err.message : "Could not analyze the file."
+      );
     } finally {
-      setImporting(false);
+      setLoading(false);
     }
   }
 
-  function columnSelect(
-    label: string,
-    key: keyof Mapping,
-    required: boolean
-  ) {
-    return (
-      <label className="import-field">
-        <span>{label}{required ? " *" : ""}</span>
-        <select
-          value={mapping[key]}
-          onChange={(event) =>
-            setMapping((current) => ({
-              ...current,
-              [key]: event.target.value,
+  async function importValidRows() {
+    setError("");
+    setMessage("");
+    setImportedCount(0);
+    setFailedBatches([]);
+
+    const ready = preview
+      .filter(
+        (item) => item.transaction && !item.error && !item.duplicate
+      )
+      .map((item) => item.transaction as TransactionInsert);
+
+    if (ready.length === 0) {
+      setError("There are no valid, non-duplicate transactions to import.");
+      return;
+    }
+
+    if (
+      !window.confirm(
+        `Import ${ready.length} transaction(s)? Invalid rows and suspected duplicates will be skipped.`
+      )
+    ) {
+      return;
+    }
+
+    setLoading(true);
+
+    let succeeded = 0;
+    const failures: string[] = [];
+    const importedKeys = new Set<string>();
+
+    const source = file?.name.toLowerCase().endsWith(".csv")
+      ? "csv_import"
+      : "excel_import";
+
+    try {
+      for (let start = 0; start < ready.length; start += BATCH_SIZE) {
+        const batch = ready.slice(start, start + BATCH_SIZE);
+
+        const { error: insertError } = await supabase
+          .from("transactions")
+          .insert(
+            batch.map((transaction) => ({
+              user_id: userId,
+              ...transaction,
+              source,
             }))
+          );
+
+        if (insertError) {
+          failures.push(
+            `Batch ${Math.floor(start / BATCH_SIZE) + 1}: ${insertError.message}`
+          );
+        } else {
+          succeeded += batch.length;
+
+          for (const transaction of batch) {
+            importedKeys.add(fingerprint(transaction));
           }
-        >
-          <option value="">— Not mapped —</option>
-          {headers.map((header, index) => (
-            <option key={index} value={String(index)}>
-              {header || `Column ${index + 1}`}
-            </option>
-          ))}
-        </select>
-      </label>
-    );
+        }
+      }
+
+      setImportedCount(succeeded);
+      setFailedBatches(failures);
+
+      // Mark confirmed successful rows so a later retry will not
+      // include those same rows in this preview.
+      setPreview((current) =>
+        current.map((item) => {
+          if (
+            item.transaction &&
+            importedKeys.has(fingerprint(item.transaction))
+          ) {
+            return {
+              ...item,
+              duplicate: true,
+              duplicateReason: "Imported successfully in this session",
+            };
+          }
+
+          return item;
+        })
+      );
+
+      if (succeeded > 0) {
+        onImported();
+      }
+
+      setMessage(
+        `Import finished: ${succeeded} transaction(s) inserted; ${failures.length} batch(es) failed.`
+      );
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "The import failed unexpectedly."
+      );
+    } finally {
+      setLoading(false);
+    }
   }
 
+  const readyCount = preview.filter(
+    (item) => item.transaction && !item.error && !item.duplicate
+  ).length;
+
   return (
-    <section className="import-panel">
+    <section className="panel">
       <h2>Import bank statement</h2>
       <p className="muted">
-        Upload a CSV or Excel statement with separate debit and credit columns.
-        Debit becomes expense; credit becomes income.
+        Upload a CSV or Excel statement with separate Debit and Credit
+        columns. The file is parsed in your browser.
       </p>
 
-      <label className="import-field">
-        <span>Choose a file</span>
-        <input
-          type="file"
-          accept=".csv,.xls,.xlsx"
-          disabled={loadingFile || importing}
+      <label className="field-label" htmlFor="transaction-import-file">
+        Bank statement file
+      </label>
+      <input
+        id="transaction-import-file"
+        type="file"
+        accept=".csv,.xlsx,.xls"
+        onChange={handleFileChange}
+        disabled={loading}
+      />
+      <p className="small muted">
+        Maximum 5 MB and 5,000 non-empty data rows.
+      </p>
+
+      <label className="field-label">
+        Date format for text dates
+        <select
+          value={dateFormat}
           onChange={(event) => {
-            void handleFile(event.target.files?.[0]);
-            event.currentTarget.value = "";
+            setDateFormat(event.target.value as "dmy" | "mdy");
+            resetAnalysis();
           }}
-        />
+          disabled={loading}
+        >
+          <option value="dmy">DD/MM/YYYY — e.g. 20/10/2026</option>
+          <option value="mdy">MM/DD/YYYY — e.g. 10/20/2026</option>
+        </select>
       </label>
 
-      {loadingFile && <p>Reading file and checking existing transactions…</p>}
-
-      {fileName && (
+      {headers.length > 0 && (
         <>
-          <p><strong>File:</strong> {fileName}</p>
+          <h3>Map spreadsheet columns</h3>
 
           <div className="import-mapping">
-            <h3>Map your columns</h3>
-            {columnSelect("Transaction date", "date", true)}
-            {columnSelect("Description", "description", true)}
-            {columnSelect("Debit amount", "debit", true)}
-            {columnSelect("Credit amount", "credit", true)}
-            {columnSelect("Category (optional)", "category", false)}
-            {columnSelect("Notes (optional)", "notes", false)}
-
-            <label className="import-field">
-              <span>Date format for text dates</span>
-              <select
-                value={dateFormat}
-                onChange={(event) =>
-                  setDateFormat(event.target.value as "dmy" | "mdy")
-                }
-              >
-                <option value="dmy">DD/MM/YYYY</option>
-                <option value="mdy">MM/DD/YYYY</option>
-              </select>
-            </label>
-
-            <p className="small muted">
-              ISO dates (YYYY-MM-DD) and Excel date cells are also supported.
-              When category is unmapped or blank, the matching “Other Income”
-              or “Other Expense” category is used.
-            </p>
+            {(Object.keys(FIELD_LABELS) as Field[]).map((field) => (
+              <label className="field-label" key={field}>
+                {FIELD_LABELS[field]}
+                <select
+                  value={mapping[field]}
+                  onChange={(event) => {
+                    setMapping((current) => ({
+                      ...current,
+                      [field]: event.target.value,
+                    }));
+                    resetAnalysis();
+                  }}
+                  disabled={loading}
+                >
+                  <option value="">— Not mapped —</option>
+                  {headers.map((header, index) => (
+                    <option key={index} value={String(index)}>
+                      {header || `Column ${index + 1}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ))}
           </div>
 
-          <h3>Preview</h3>
-          <p>
-            {validCount} valid · {invalidCount} invalid · {duplicateCount} duplicate-looking
+          <p className="small muted">
+            Credit becomes income; Debit becomes expense. If you do not map
+            a category column, the importer uses Other Income or Other
+            Expense.
           </p>
 
-          <label className="import-duplicate-option">
-            <input
-              type="checkbox"
-              checked={allowDuplicates}
-              onChange={(event) => setAllowDuplicates(event.target.checked)}
-            />
-            Allow duplicate-looking rows (review carefully)
-          </label>
+          <button
+            type="button"
+            className="primary-button"
+            onClick={() => void analyzeFile()}
+            disabled={loading}
+          >
+            {loading ? "Working…" : "Analyze and preview"}
+          </button>
+        </>
+      )}
 
-          <div className="import-table-wrap">
+      {error && <p className="error-message">{error}</p>}
+      {message && <p role="status">{message}</p>}
+
+      {preview.length > 0 && (
+        <>
+          <h3>Import preview</h3>
+
+          <div className="import-summary">
+            <span>{readyCount} ready</span>
+            <span>
+              {preview.filter((item) => item.duplicate).length} suspected
+              duplicates
+            </span>
+            <span>
+              {preview.filter((item) => item.error).length} invalid
+            </span>
+          </div>
+
+          <div className="table-scroll">
             <table>
               <thead>
                 <tr>
-                  <th>Row</th>
+                  <th>File row</th>
                   <th>Date</th>
                   <th>Description</th>
                   <th>Type</th>
                   <th>Amount</th>
-                  <th>Status</th>
+                  <th>Result</th>
                 </tr>
               </thead>
               <tbody>
-                {preview.slice(0, 100).map((row) => (
-                  <tr key={row.rowNumber}>
-                    <td>{row.rowNumber}</td>
-                    <td>{row.transaction?.transaction_date ?? "—"}</td>
-                    <td>{row.transaction?.description ?? "—"}</td>
-                    <td>{row.transaction?.kind ?? "—"}</td>
+                {preview.slice(0, 200).map((item) => (
+                  <tr key={item.rowNumber}>
+                    <td>{item.rowNumber}</td>
+                    <td>{item.transaction?.transaction_date ?? "—"}</td>
+                    <td>{item.transaction?.description ?? "—"}</td>
+                    <td>{item.transaction?.kind ?? "—"}</td>
                     <td>
-                      {row.transaction
-                        ? formatPaisa(row.transaction.amount_paisa)
+                      {item.transaction
+                        ? formatPaisa(item.transaction.amount_paisa)
                         : "—"}
                     </td>
                     <td>
-                      {row.issues.length > 0
-                        ? row.issues.join(" ")
-                        : row.duplicateReason
-                          ? row.duplicateReason
+                      {item.error
+                        ? `Invalid: ${item.error}`
+                        : item.duplicate
+                          ? `Duplicate: ${item.duplicateReason}`
                           : "Ready"}
                     </td>
                   </tr>
@@ -676,30 +825,46 @@ export default function ImportTransactions({
             </table>
           </div>
 
-          {preview.length > 100 && (
+          {preview.length > 200 && (
             <p className="small muted">
-              Showing the first 100 rows of {preview.length}. All rows are validated.
+              Showing the first 200 of {preview.length} rows. All rows are
+              included in validation and import counts.
             </p>
           )}
 
           <button
             type="button"
             className="primary-button"
-            disabled={
-              importing ||
-              loadingFile ||
-              !existingLoaded ||
-              importable.length === 0
-            }
-            onClick={() => void importTransactions()}
+            onClick={() => void importValidRows()}
+            disabled={loading || readyCount === 0}
           >
-            {importing ? "Importing…" : `Import ${importable.length} transactions`}
+            {loading
+              ? "Importing…"
+              : `Import ${readyCount} valid transaction(s)`}
           </button>
+
+          {importedCount > 0 && (
+            <p role="status">
+              {importedCount} transaction(s) were inserted.
+            </p>
+          )}
+
+          {failedBatches.length > 0 && (
+            <div className="error-message">
+              <strong>
+                Some batches failed. Review the errors before retrying.
+              </strong>
+              <ul>
+                {failedBatches.map((failure) => (
+                  <li key={failure}>{failure}</li>
+                ))}
+              </ul>
+              Re-analyze the file against the database before retrying,
+              because a network failure may leave the outcome uncertain.
+            </div>
+          )}
         </>
       )}
-
-      {error && <p className="error-message" role="alert">{error}</p>}
-      {message && <p className="success-message" role="status">{message}</p>}
     </section>
   );
 }

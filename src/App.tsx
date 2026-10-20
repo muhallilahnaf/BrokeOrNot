@@ -5,7 +5,6 @@ import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./lib/supabase";
 import "./index.css";
 import Transactions from "./components/Transactions";
-import ImportTransactions from "./components/ImportTransactions";
 
 type Category = {
   id: string;
@@ -33,7 +32,7 @@ function formatBDT(paisa: number | string) {
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [dataLoading, setDataLoading] = useState(false);
+  const [loadedUserId, setLoadedUserId] = useState<string | null>(null);
 
   const [mode, setMode] = useState<AuthMode>("signin");
   const [email, setEmail] = useState("");
@@ -43,8 +42,6 @@ export default function App() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-
-  const [transactionRefreshKey, setTransactionRefreshKey] = useState(0);
 
   useEffect(() => {
     let active = true;
@@ -79,17 +76,16 @@ export default function App() {
     };
   }, []);
 
+  const userId = session?.user.id;
+
   useEffect(() => {
-    if (!session?.user.id) {
-      setSettings(null);
-      setCategories([]);
+    if (!userId) {
       return;
     }
 
     let active = true;
 
     async function loadUserData() {
-      setDataLoading(true);
       setError("");
 
       try {
@@ -99,13 +95,13 @@ export default function App() {
             .select(
               "opening_balance_paisa, opening_balance_date, currency, week_starts_on"
             )
-            .eq("user_id", session!.user.id)
+            .eq("user_id", userId)
             .maybeSingle(),
 
           supabase
             .from("categories")
             .select("id, name, kind, is_active")
-            .eq("user_id", session!.user.id)
+            .eq("user_id", userId)
             .order("kind")
             .order("name"),
         ]);
@@ -135,11 +131,13 @@ export default function App() {
       } catch (err) {
         if (active) {
           setError(
-            err instanceof Error ? err.message : "Could not load your data."
+            err instanceof Error
+              ? err.message
+              : "Could not load your data."
           );
         }
       } finally {
-        if (active) setDataLoading(false);
+        if (active) setLoadedUserId(userId);
       }
     }
 
@@ -148,7 +146,9 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [session?.user.id]);
+  }, [userId]);
+
+  const dataLoading = Boolean(userId && loadedUserId !== userId);
 
   async function handleAuth(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -207,7 +207,6 @@ export default function App() {
     if (error) setError(error.message);
   }
 
-
   async function checkOtherUserReadIsolation() {
     if (!session) return;
 
@@ -231,9 +230,7 @@ export default function App() {
       .eq("user_id", otherUserId);
 
     if (error) {
-      setError(
-        `RLS test inconclusive: ${error.message}`
-      );
+      setError(`RLS test inconclusive: ${error.message}`);
       return;
     }
 
@@ -248,9 +245,12 @@ export default function App() {
     }
   }
 
-
   if (authLoading) {
-    return <main className="page"><p>Loading BrokeOrNot…</p></main>;
+    return (
+      <main className="page">
+        <p>Loading BrokeOrNot…</p>
+      </main>
+    );
   }
 
   if (!session) {
@@ -275,6 +275,7 @@ export default function App() {
             >
               Sign in
             </button>
+
             <button
               type="button"
               className={mode === "signup" ? "tab active" : "tab"}
@@ -304,7 +305,9 @@ export default function App() {
               id="password"
               type="password"
               autoComplete={
-                mode === "signup" ? "new-password" : "current-password"
+                mode === "signup"
+                  ? "new-password"
+                  : "current-password"
               }
               minLength={8}
               value={password}
@@ -331,6 +334,7 @@ export default function App() {
   const incomeCount = categories.filter(
     (category) => category.kind === "income"
   ).length;
+
   const expenseCount = categories.filter(
     (category) => category.kind === "expense"
   ).length;
@@ -342,7 +346,12 @@ export default function App() {
           <p className="eyebrow">YOUR PERSONAL FINANCES</p>
           <h1>BrokeOrNot</h1>
         </div>
-        <button className="secondary-button" onClick={handleSignOut}>
+
+        <button
+          type="button"
+          className="secondary-button"
+          onClick={handleSignOut}
+        >
           Sign out
         </button>
       </header>
@@ -388,6 +397,7 @@ export default function App() {
 
           <section className="panel">
             <h2>Your categories</h2>
+
             {categories.length === 0 ? (
               <p className="muted">
                 No categories found. Check the initialization trigger.
@@ -398,7 +408,9 @@ export default function App() {
                   <li key={category.id}>
                     <span>{category.name}</span>
                     <span className="pill">
-                      {category.kind === "income" ? "Income" : "Expense"}
+                      {category.kind === "income"
+                        ? "Income"
+                        : "Expense"}
                     </span>
                   </li>
                 ))}
@@ -407,27 +419,13 @@ export default function App() {
           </section>
 
           {settings && (
-            <>
-              <Transactions
-                userId={session.user.id}
-                openingBalancePaisa={settings.opening_balance_paisa}
-                openingBalanceDate={settings.opening_balance_date}
-                categories={categories}
-                refreshKey={transactionRefreshKey}
-              />
-              <ImportTransactions
-                userId={session.user.id}
-                openingBalanceDate={settings.opening_balance_date}
-                categories={categories}
-                onImported={() =>
-                  setTransactionRefreshKey((key) => key + 1)
-                }
-              />
-            </>
+            <Transactions
+              userId={session.user.id}
+              openingBalancePaisa={settings.opening_balance_paisa}
+              openingBalanceDate={settings.opening_balance_date}
+              categories={categories}
+            />
           )}
-
-
-
 
           <section className="panel">
             <h2>Security check</h2>
@@ -436,13 +434,13 @@ export default function App() {
               database security policies.
             </p>
             <button
+              type="button"
               className="secondary-button"
               onClick={checkOtherUserReadIsolation}
             >
               Test RLS read isolation
             </button>
           </section>
-
         </>
       )}
     </main>

@@ -498,3 +498,42 @@ button:disabled {
     padding: 12px;
   }
 }
+
+
+.import-mapping {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin: 16px 0;
+}
+
+.import-mapping label {
+  min-width: 0;
+}
+
+.import-mapping select {
+  display: block;
+  width: 100%;
+  max-width: 100%;
+  margin-top: 6px;
+}
+
+.import-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.import-summary span {
+  padding: 7px 10px;
+  border: 1px solid #d8dce3;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+@media (max-width: 650px) {
+  .import-mapping {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
