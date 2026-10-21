@@ -1,5 +1,5 @@
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { formatPaisa } from "../lib/money";
 import type { EditableTransaction } from "./Transactions";
@@ -175,6 +175,7 @@ export default function CalendarForecast({
   const [error, setError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
   const [deletingTransactionId, setDeletingTransactionId] = useState<string | null>(null);
+  const monthPickerRef = useRef<HTMLInputElement>(null);
 
   const openingBalance = safeAmount(openingBalancePaisa);
 
@@ -622,6 +623,14 @@ export default function CalendarForecast({
     setSelectedDate(nextMonth);
   }
 
+  function openMonthPicker() {
+    const picker = monthPickerRef.current;
+    if (!picker) return;
+
+    if (typeof picker.showPicker === "function") picker.showPicker();
+    else picker.click();
+  }
+
   function selectDay(date: string) {
     setSelectedDate(date);
   }
@@ -744,7 +753,28 @@ export default function CalendarForecast({
           ‹
         </button>
 
-        <h3>{monthLabel(visibleMonth)}</h3>
+        <button
+          type="button"
+          className="cf-month-picker-button"
+          onClick={openMonthPicker}
+          aria-label={`Choose month, currently ${monthLabel(visibleMonth)}`}
+        >
+          {monthLabel(visibleMonth)}
+        </button>
+        <input
+          ref={monthPickerRef}
+          className="cf-month-picker-input"
+          type="month"
+          value={visibleMonth.slice(0, 7)}
+          aria-label="Choose calendar month"
+          tabIndex={-1}
+          onChange={(event) => {
+            if (!event.target.value) return;
+            const month = `${event.target.value}-01`;
+            setVisibleMonth(month);
+            setSelectedDate(month);
+          }}
+        />
 
         <button
           type="button"

@@ -1,5 +1,5 @@
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { formatPaisa } from "../lib/money";
 import "./FinancialDashboard.css";
@@ -155,6 +155,7 @@ export default function FinancialDashboard({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
+  const monthPickerRef = useRef<HTMLInputElement>(null);
 
   const openingBalance = amount(openingBalancePaisa);
 
@@ -267,6 +268,14 @@ export default function FinancialDashboard({
     setError("");
     setLoading(true);
     setRefreshKey((key) => key + 1);
+  }
+
+  function openMonthPicker() {
+    const picker = monthPickerRef.current;
+    if (!picker) return;
+
+    if (typeof picker.showPicker === "function") picker.showPicker();
+    else picker.click();
   }
 
   const categoryById = useMemo(
@@ -545,7 +554,25 @@ export default function FinancialDashboard({
           ‹
         </button>
 
-        <h3>{monthLabel(selectedMonth)}</h3>
+        <button
+          type="button"
+          className="fd-month-picker-button"
+          onClick={openMonthPicker}
+          aria-label={`Choose month, currently ${monthLabel(selectedMonth)}`}
+        >
+          {monthLabel(selectedMonth)}
+        </button>
+        <input
+          ref={monthPickerRef}
+          className="fd-month-picker-input"
+          type="month"
+          value={selectedMonth.slice(0, 7)}
+          aria-label="Choose dashboard month"
+          tabIndex={-1}
+          onChange={(event) => {
+            if (event.target.value) setSelectedMonth(`${event.target.value}-01`);
+          }}
+        />
 
         <button
           type="button"
