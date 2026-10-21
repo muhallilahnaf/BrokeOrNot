@@ -1,5 +1,7 @@
 # BrokeOrNot
 
+[brokeornot.vercel.app](https://brokeornot.vercel.app/)
+
 BrokeOrNot is a personal finance and cash-flow tracking web app designed
 with a calendar view to help users understand their current balance, 
 review spending, manage recurring transactions, and forecast upcoming cash flow. 
@@ -127,7 +129,7 @@ For example, if these are the variable names used by your code:
 
 ``` env
 VITE_SUPABASE_URL=your_supabase_project_url
-VITE_SUPABASE_ANON_KEY=your_supabase_publishable_or_anon_key
+VITE_SUPABASE_PUBLISHABLE_KEY=your_supabase_publishable_or_anon_key
 ```
 
 Use the exact variable names expected by your existing
