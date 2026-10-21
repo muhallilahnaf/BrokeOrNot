@@ -1,6 +1,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
+import { useToast, useToastFeedback } from "./toast-context";
 import { formatPaisa } from "../lib/money";
 import "./FinancialDashboard.css";
 
@@ -153,7 +154,8 @@ export default function FinancialDashboard({
   const [occurrences, setOccurrences] = useState<Occurrence[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const { setError } = useToastFeedback();
+  const notify = useToast();
   const [refreshKey, setRefreshKey] = useState(0);
   const monthPickerRef = useRef<HTMLInputElement>(null);
 
@@ -262,7 +264,7 @@ export default function FinancialDashboard({
 
     void refresh();
     return () => { active = false; };
-  }, [loadDashboard, refreshKey]);
+  }, [loadDashboard, refreshKey, setError]);
 
   function refreshDashboard() {
     setError("");
@@ -496,6 +498,15 @@ export default function FinancialDashboard({
     horizonEnd,
   ]);
 
+  useEffect(() => {
+    if (!loading && lowestProjectedBalance.balance < 0n) {
+      notify(
+        "warning",
+        "Your projected balance becomes negative within the forecast period. Review upcoming expenses and expected income."
+      );
+    }
+  }, [loading, lowestProjectedBalance.balance, notify]);
+
   const monthIsFuture = monthStart(selectedMonth) > monthStart(today);
   const monthIsBeforeOpening =
     monthEnd(selectedMonth) < openingBalanceDate;
@@ -524,15 +535,6 @@ export default function FinancialDashboard({
           Refresh
         </button>
       </header>
-
-      {error && (
-        <div className="fd-error" role="alert">
-          <span>{error}</span>
-          <button type="button" onClick={refreshDashboard}>
-            Retry
-          </button>
-        </div>
-      )}
 
       <div className="fd-current-balance">
         <span>Current balance</span>
@@ -775,13 +777,6 @@ export default function FinancialDashboard({
               Expected on {formatDate(lowestProjectedBalance.date)}
             </small>
           </div>
-
-          {lowestProjectedBalance.balance < 0n && (
-            <div className="fd-warning">
-              Your projected balance becomes negative within the forecast
-              period. Review upcoming expenses and expected income.
-            </div>
-          )}
 
           <p className="fd-forecast-note">
             Forecast horizon: {forecastHorizonMonths} month(s), through{" "}

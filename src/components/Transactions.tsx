@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { supabase } from "../lib/supabase";
+import { useToastFeedback } from "./toast-context";
 import {
     formatPaisa,
     getLocalDateString,
@@ -69,8 +70,7 @@ export default function Transactions({
 
     const [transactions, setTransactions] = useState<Transaction[]>([]);
     const [saving, setSaving] = useState(false);
-    const [error, setError] = useState("");
-    const [message, setMessage] = useState("");
+    const { setError, setMessage } = useToastFeedback();
     const [reloadKey, setReloadKey] = useState(0);
 
     const editingId = transactionToEdit?.id ?? null;
@@ -146,7 +146,7 @@ export default function Transactions({
 
         void refreshTransactions();
         return () => { active = false; };
-    }, [loadTransactions, reloadKey]);
+    }, [loadTransactions, reloadKey, setError]);
 
     const currentBalance = useMemo(() => {
         let balance = BigInt(openingBalancePaisa);
@@ -389,8 +389,6 @@ export default function Transactions({
                     )}
                 </form>
 
-                {error && <p className="error" role="alert">{error}</p>}
-                {message && <p className="success" role="status">{message}</p>}
             </section>
 
             <section className="panel">

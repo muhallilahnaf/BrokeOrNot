@@ -1,6 +1,7 @@
 
 import { useState, type FormEvent } from "react";
 import { supabase } from "../lib/supabase";
+import { useToastFeedback } from "./toast-context";
 
 type CategoryKind = "income" | "expense";
 
@@ -32,8 +33,7 @@ export default function Categories({
 
   const [showInactive, setShowInactive] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [message, setMessage] = useState("");
+  const { setError, setMessage } = useToastFeedback();
 
   const sortedCategories = [...categories].sort((a, b) => {
     if (a.kind !== b.kind) {
@@ -329,18 +329,6 @@ export default function Categories({
           {busy ? "Please wait…" : "Add category"}
         </button>
       </form>
-
-      {error && (
-        <p className="error" role="alert">
-          {error}
-        </p>
-      )}
-
-      {message && (
-        <p className="success" role="status">
-          {message}
-        </p>
-      )}
 
       <div className="category-management-toolbar">
         <h3>Existing categories ({categories.length})</h3>

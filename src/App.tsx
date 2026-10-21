@@ -16,6 +16,7 @@ import RecurringOccurrences from "./components/RecurringOccurrences";
 import CalendarForecast from "./components/CalendarForecast";
 import FinancialDashboard from "./components/FinancialDashboard";
 import { ImportTransactions } from "./components/ImportTransactions";
+import { useToastFeedback } from "./components/toast-context";
 
 type Category = {
   id: string;
@@ -53,8 +54,7 @@ export default function App() {
 
   const [settings, setSettings] = useState<UserSettings | null>(null);
   const [categories, setCategories] = useState<Category[]>([]);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
+  const { setError, setMessage } = useToastFeedback();
   const [transactionRefreshKey, setTransactionRefreshKey] = useState(0);
   const [transactionToEdit, setTransactionToEdit] =
     useState<EditableTransaction | null>(null);
@@ -96,7 +96,7 @@ export default function App() {
       active = false;
       subscription.unsubscribe();
     };
-  }, []);
+  }, [setError, setMessage]);
 
   const userId = session?.user.id;
 
@@ -170,7 +170,7 @@ export default function App() {
     return () => {
       active = false;
     };
-  }, [userId]);
+  }, [setError, userId]);
 
   const dataLoading = Boolean(userId && loadedUserId !== userId);
 
@@ -353,8 +353,6 @@ export default function App() {
             </button>
           </form>
 
-          {message && <p className="success">{message}</p>}
-          {error && <p className="error">{error}</p>}
 
           <p className="small muted">
             Your financial records are private to your account.
@@ -397,8 +395,6 @@ export default function App() {
 
 
 
-      {error && <p className="error">{error}</p>}
-      {message && <p className="success">{message}</p>}
 
       {dataLoading ? (
         <p>Loading your financial setup...</p>
@@ -406,7 +402,7 @@ export default function App() {
         <section className="panel">
           <h2>Financial setup unavailable</h2>
           <p className="muted">
-            Your settings could not be loaded. Check the message above or reload the app.
+            Your settings could not be loaded. Please refresh the app or sign out and sign in again.
           </p>
         </section>
       ) : (

@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { supabase } from "../lib/supabase";
 import { formatPaisa } from "../lib/money";
+import { useToastFeedback } from "./toast-context";
 
 type WeekStartsOn = "sunday" | "monday" | "saturday";
 
@@ -95,8 +96,7 @@ export default function Settings({
   );
 
   const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
+  const { setError, setSuccess } = useToastFeedback();
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -296,8 +296,6 @@ export default function Settings({
           </span>
         </label>
 
-        {error && <p className="error">{error}</p>}
-        {success && <p className="success">{success}</p>}
 
         <button
           type="submit"

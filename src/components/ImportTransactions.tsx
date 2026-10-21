@@ -3,6 +3,7 @@ import { useState, type ChangeEvent } from "react";
 import * as XLSX from "xlsx";
 import { supabase } from "../lib/supabase";
 import { parseTakaToPaisa, formatPaisa } from "../lib/money";
+import { useToast, useToastFeedback } from "./toast-context";
 
 type Category = {
   id: string;
@@ -236,9 +237,8 @@ export function ImportTransactions({
   const [dateFormat, setDateFormat] = useState<"dmy" | "mdy">("dmy");
   const [preview, setPreview] = useState<PreviewRow[]>([]);
   const [loading, setLoading] = useState(false);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
-  const [importedCount, setImportedCount] = useState(0);
+  const { setMessage, setError } = useToastFeedback();
+  const notify = useToast();
   const [failedBatches, setFailedBatches] = useState<string[]>([]);
 
   const activeCategories = categories.filter(
@@ -249,7 +249,6 @@ export function ImportTransactions({
     setPreview([]);
     setMessage("");
     setError("");
-    setImportedCount(0);
     setFailedBatches([]);
   }
 
@@ -585,7 +584,6 @@ export function ImportTransactions({
   async function importValidRows() {
     setError("");
     setMessage("");
-    setImportedCount(0);
     setFailedBatches([]);
 
     const ready = preview
@@ -644,7 +642,6 @@ export function ImportTransactions({
         }
       }
 
-      setImportedCount(succeeded);
       setFailedBatches(failures);
 
       // Mark confirmed successful rows so a later retry will not
@@ -670,9 +667,10 @@ export function ImportTransactions({
         onImported();
       }
 
-      setMessage(
-        `Import finished: ${succeeded} transaction(s) inserted; ${failures.length} batch(es) failed.`
-      );
+      const importMessage =
+        `Import finished: ${succeeded} transaction(s) inserted; ` +
+        `${failures.length} batch(es) failed.`;
+      notify(failures.length > 0 ? "warning" : "success", importMessage);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "The import failed unexpectedly."
@@ -770,8 +768,6 @@ export function ImportTransactions({
         </>
       )}
 
-      {error && <p className="error-message">{error}</p>}
-      {message && <p role="status">{message}</p>}
 
       {preview.length > 0 && (
         <>
@@ -843,11 +839,6 @@ export function ImportTransactions({
               : `Import ${readyCount} valid transaction(s)`}
           </button>
 
-          {importedCount > 0 && (
-            <p role="status">
-              {importedCount} transaction(s) were inserted.
-            </p>
-          )}
 
           {failedBatches.length > 0 && (
             <div className="error-message">

@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { formatPaisa } from "../lib/money";
+import { useToastFeedback } from "./toast-context";
 
 type OccurrenceStatus =
   | "pending"
@@ -66,8 +67,7 @@ export default function RecurringOccurrences({
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
+  const { setError, setNotice } = useToastFeedback();
 
   const [payingOccurrence, setPayingOccurrence] =
     useState<OccurrenceView | null>(null);
@@ -195,7 +195,7 @@ export default function RecurringOccurrences({
     return () => {
       cancelled = true;
     };
-  }, [userId]);
+  }, [setError, userId]);
 
   async function generateOccurrences() {
     setGenerating(true);
@@ -415,8 +415,6 @@ export default function RecurringOccurrences({
         </select>
       </label>
 
-      {error && <p className="error">{error}</p>}
-      {notice && <p className="success">{notice}</p>}
 
       {payingOccurrence && (
         <div className="payment-editor">

@@ -6,6 +6,7 @@ import {
   type FormEvent,
 } from "react";
 import { supabase } from "../lib/supabase";
+import { useToastFeedback } from "./toast-context";
 import {
   formatPaisa,
   parseTakaToPaisa,
@@ -216,8 +217,7 @@ export default function RecurringSchedules({
   const [loadedUserId, setLoadedUserId] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
+  const { setError, setSuccess } = useToastFeedback();
   const [showInactive, setShowInactive] = useState(true);
   const [editing, setEditing] = useState<Schedule | null>(null);
   const [form, setForm] = useState<FormValues>(emptyForm);
@@ -289,7 +289,7 @@ export default function RecurringSchedules({
     return () => {
       cancelled = true;
     };
-  }, [userId]);
+  }, [setError, userId]);
 
   const userSchedules = loadedUserId === userId ? schedules : [];
   const isLoading = loading || loadedUserId !== userId;
@@ -715,8 +715,6 @@ export default function RecurringSchedules({
           />
         </label>
 
-        {error && <p className="error">{error}</p>}
-        {success && <p className="success">{success}</p>}
 
         <div className="recurring-actions">
           <button

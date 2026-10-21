@@ -1,6 +1,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { supabase } from "../lib/supabase";
+import { useToastFeedback } from "./toast-context";
 import { formatPaisa } from "../lib/money";
 import type { EditableTransaction } from "./Transactions";
 import "./CalendarForecast.css";
@@ -172,7 +173,7 @@ export default function CalendarForecast({
   const [occurrences, setOccurrences] = useState<ScheduleOccurrence[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState("");
+  const { setError } = useToastFeedback();
   const [refreshKey, setRefreshKey] = useState(0);
   const [deletingTransactionId, setDeletingTransactionId] = useState<string | null>(null);
   const monthPickerRef = useRef<HTMLInputElement>(null);
@@ -268,7 +269,7 @@ export default function CalendarForecast({
 
     void refresh();
     return () => { active = false; };
-  }, [loadData, refreshKey, dataVersion]);
+  }, [loadData, refreshKey, dataVersion, setError]);
 
   const scheduleById = useMemo(() => {
     return new Map(schedules.map((schedule) => [schedule.id, schedule]));
@@ -720,22 +721,6 @@ export default function CalendarForecast({
           Refresh
         </button>
       </div>
-
-      {error && (
-        <div className="cf-error" role="alert">
-          <span>{error}</span>
-          <button
-            type="button"
-            onClick={() => {
-              setError("");
-              setLoading(true);
-              setRefreshKey((key) => key + 1);
-            }}
-          >
-            Try again
-          </button>
-        </div>
-      )}
 
       <div className="cf-legend">
         <span className="cf-legend-income">Income</span>
