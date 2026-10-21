@@ -1,10 +1,12 @@
-
+﻿
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { supabase } from "./lib/supabase";
 import "./index.css";
-import Transactions from "./components/Transactions";
+import Transactions, {
+  type EditableTransaction,
+} from "./components/Transactions";
 import Categories from "./components/Categories";
 import Settings, {
   type UserSettings,
@@ -13,6 +15,7 @@ import RecurringSchedules from "./components/RecurringSchedules";
 import RecurringOccurrences from "./components/RecurringOccurrences";
 import CalendarForecast from "./components/CalendarForecast";
 import FinancialDashboard from "./components/FinancialDashboard";
+import { ImportTransactions } from "./components/ImportTransactions";
 
 type Category = {
   id: string;
@@ -22,6 +25,22 @@ type Category = {
 };
 
 type AuthMode = "signin" | "signup";
+type AppScreen =
+  | "dashboard"
+  | "transactions"
+  | "categories"
+  | "import_export"
+  | "recurring"
+  | "settings";
+
+const APP_SCREENS: { id: AppScreen; label: string }[] = [
+  { id: "dashboard", label: "Dashboard" },
+  { id: "transactions", label: "Transactions" },
+  { id: "categories", label: "Categories" },
+  { id: "import_export", label: "Import / Export" },
+  { id: "recurring", label: "Recurring" },
+  { id: "settings", label: "Settings" },
+];
 
 function formatBDT(paisa: number | string) {
   return new Intl.NumberFormat("en-BD", {
@@ -44,6 +63,14 @@ export default function App() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [transactionRefreshKey, setTransactionRefreshKey] = useState(0);
+  const [transactionToEdit, setTransactionToEdit] =
+    useState<EditableTransaction | null>(null);
+  const [activeScreen, setActiveScreen] = useState<AppScreen>("dashboard");
+
+  function handleTransactionsChanged() {
+    setTransactionToEdit(null);
+    setTransactionRefreshKey((key) => key + 1);
+  }
 
   useEffect(() => {
     let active = true;
@@ -299,7 +326,7 @@ export default function App() {
   if (authLoading) {
     return (
       <main className="page">
-        <p>Loading BrokeOrNot…</p>
+        <p>Loading BrokeOrNotâ€¦</p>
       </main>
     );
   }
@@ -406,72 +433,75 @@ export default function App() {
           Sign out
         </button>
       </header>
+      <nav className="screen-nav" aria-label="Main navigation">
+        {APP_SCREENS.map((screen) => (
+          <button
+            key={screen.id}
+            type="button"
+            className={activeScreen === screen.id ? "screen-tab active" : "screen-tab"}
+            aria-current={activeScreen === screen.id ? "page" : undefined}
+            onClick={() => setActiveScreen(screen.id)}
+          >
+            {screen.label}
+          </button>
+        ))}
+      </nav>
 
-      <section className="panel">
-        <p className="muted">Signed in as</p>
-        <strong>{session.user.email}</strong>
-        <p className="small muted">
-          User ID: <code>{session.user.id}</code>
-        </p>
-      </section>
+
 
       {error && <p className="error">{error}</p>}
       {message && <p className="success">{message}</p>}
 
       {dataLoading ? (
-        <p>Loading your financial setup…</p>
+        <p>Loading your financial setup...</p>
+      ) : !settings ? (
+        <section className="panel">
+          <h2>Financial setup unavailable</h2>
+          <p className="muted">
+            Your settings could not be loaded. Check the message above or reload the app.
+          </p>
+        </section>
       ) : (
         <>
-          <section className="summary-grid">
-            <article className="panel">
-              <p className="muted">Opening balance</p>
-              <h2>
-                {settings
-                  ? formatBDT(settings.opening_balance_paisa)
-                  : "Not set"}
-              </h2>
-              <p className="small muted">
-                {settings?.opening_balance_date ?? ""}
-              </p>
-            </article>
-
-            <article className="panel">
-              <p className="muted">Income categories</p>
-              <h2>{incomeCount}</h2>
-            </article>
-
-            <article className="panel">
-              <p className="muted">Expense categories</p>
-              <h2>{expenseCount}</h2>
-            </article>
-          </section>
-
-
-
-          {settings && (
+          {activeScreen === "dashboard" && (
             <>
-              <Settings
-                userId={session.user.id}
-                settings={settings}
-                onSettingsChanged={refreshSettings}
-              />
+              <section className="summary-grid">
+                <article className="panel">
+                  <p className="muted">Opening balance</p>
+                  <h2>{formatBDT(settings.opening_balance_paisa)}</h2>
+                  <p className="small muted">{settings.opening_balance_date}</p>
+                </article>
+                <article className="panel">
+                  <p className="muted">Income categories</p>
+                  <h2>{incomeCount}</h2>
+                </article>
+                <article className="panel">
+                  <p className="muted">Expense categories</p>
+                  <h2>{expenseCount}</h2>
+                </article>
+              </section>
               <FinancialDashboard
-                key={session.user.id}
+                key={`${session.user.id}:${transactionRefreshKey}`}
                 userId={session.user.id}
                 openingBalancePaisa={settings.opening_balance_paisa}
                 openingBalanceDate={settings.opening_balance_date}
                 forecastHorizonMonths={settings.forecast_horizon_months}
               />
-              <Categories
-                userId={session.user.id}
-                categories={categories}
-                onCategoriesChanged={refreshCategories} />
+            </>
+          )}
+
+          {activeScreen === "transactions" && (
+            <>
               <Transactions
-                key={`${settings.opening_balance_paisa}:${settings.opening_balance_date}:${transactionRefreshKey}`}
+                key={`${settings.opening_balance_paisa}:${settings.opening_balance_date}:${transactionRefreshKey}:${transactionToEdit?.id ?? "new"}`}
                 userId={session.user.id}
                 openingBalancePaisa={settings.opening_balance_paisa}
                 openingBalanceDate={settings.opening_balance_date}
-                categories={categories} />
+                categories={categories}
+                transactionToEdit={transactionToEdit}
+                onEditCancelled={() => setTransactionToEdit(null)}
+                onTransactionChanged={handleTransactionsChanged}
+              />
               <CalendarForecast
                 key={session.user.id}
                 userId={session.user.id}
@@ -479,40 +509,89 @@ export default function App() {
                 openingBalanceDate={settings.opening_balance_date}
                 weekStartsOn={settings.week_starts_on}
                 forecastHorizonMonths={settings.forecast_horizon_months}
+                dataVersion={transactionRefreshKey}
+                onEditTransaction={setTransactionToEdit}
+                onTransactionChanged={handleTransactionsChanged}
               />
+            </>
+          )}
+
+          {activeScreen === "categories" && (
+            <Categories
+              userId={session.user.id}
+              categories={categories}
+              onCategoriesChanged={refreshCategories}
+            />
+          )}
+
+          {activeScreen === "import_export" && (
+            <>
+              <ImportTransactions
+                userId={session.user.id}
+                openingBalanceDate={settings.opening_balance_date}
+                categories={categories}
+                onImported={handleTransactionsChanged}
+              />
+              <section className="panel">
+                <h2>Export transactions</h2>
+                <p className="muted">
+                  Export options will be available in a future update.
+                </p>
+                <button className="secondary-button" type="button" disabled>
+                  Export transactions
+                </button>
+              </section>
+            </>
+          )}
+
+          {activeScreen === "recurring" && (
+            <>
               <RecurringSchedules
-                key={session.user.id}
+                key={`${session.user.id}:schedules`}
                 userId={session.user.id}
                 categories={categories}
               />
               <RecurringOccurrences
-                key={session.user.id}
+                key={`${session.user.id}:occurrences`}
                 userId={session.user.id}
                 categories={categories}
-                onTransactionCreated={() =>
-                  setTransactionRefreshKey((key) => key + 1)
-                }
+                onTransactionCreated={handleTransactionsChanged}
               />
             </>
-
           )}
 
-          <section className="panel">
-            <h2>Security check</h2>
-            <p className="muted">
-              Test whether another user's categories are hidden by
-              database security policies.
-            </p>
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={checkOtherUserReadIsolation}
-            >
-              Test RLS read isolation
-            </button>
-          </section>
+          {activeScreen === "settings" && (
+            <>
+              <section className="panel">
+                <h2>Signed in as</h2>
+                <strong>{session.user.email}</strong>
+                <p className="small muted">
+                  User ID: <code>{session.user.id}</code>
+                </p>
+              </section>
+              <Settings
+                userId={session.user.id}
+                settings={settings}
+                onSettingsChanged={refreshSettings}
+              />
+              <section className="panel">
+                <h2>Security check</h2>
+                <p className="muted">
+                  Test whether another user's categories are hidden by database security policies.
+                </p>
+                <button
+                  type="button"
+                  className="secondary-button"
+                  onClick={checkOtherUserReadIsolation}
+                >
+                  Test RLS read isolation
+                </button>
+              </section>
+            </>
+          )}
         </>
       )}
     </main>
   );
 }
+

@@ -2,6 +2,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { supabase } from "../lib/supabase";
 import { formatPaisa } from "../lib/money";
+import type { EditableTransaction } from "./Transactions";
 import "./CalendarForecast.css";
 
 type Props = {
@@ -10,16 +11,12 @@ type Props = {
   openingBalanceDate: string;
   weekStartsOn: "sunday" | "monday" | "saturday";
   forecastHorizonMonths: number;
+  dataVersion: number;
+  onEditTransaction: (transaction: EditableTransaction) => void;
+  onTransactionChanged: () => void;
 };
 
-type Transaction = {
-  id: string;
-  transaction_date: string;
-  description: string;
-  kind: "income" | "expense";
-  amount_paisa: string | number;
-  source: string;
-};
+type Transaction = EditableTransaction;
 
 type ScheduleOccurrence = {
   id: string;
@@ -44,6 +41,7 @@ type CalendarEntry = {
   amount: bigint;
   type: "transaction" | "scheduled";
   source?: string;
+  notes?: string | null;
 };
 
 type DailyTotals = {
@@ -161,6 +159,9 @@ export default function CalendarForecast({
   openingBalanceDate,
   weekStartsOn,
   forecastHorizonMonths,
+  dataVersion,
+  onEditTransaction,
+  onTransactionChanged,
 }: Props) {
   const today = dateString(new Date());
   const initialMonth = monthStart(today);
@@ -173,6 +174,7 @@ export default function CalendarForecast({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [refreshKey, setRefreshKey] = useState(0);
+  const [deletingTransactionId, setDeletingTransactionId] = useState<string | null>(null);
 
   const openingBalance = safeAmount(openingBalancePaisa);
 
@@ -189,10 +191,9 @@ export default function CalendarForecast({
         const { data, error: transactionError } = await supabase
           .from("transactions")
           .select(
-            "id,transaction_date,description,kind,amount_paisa,source",
+            "id,transaction_date,description,kind,amount_paisa,category_id,notes,source",
           )
           .eq("user_id", userId)
-          .gte("transaction_date", openingBalanceDate)
           .order("transaction_date", { ascending: true })
           .range(from, from + PAGE_SIZE - 1);
 
@@ -266,7 +267,7 @@ export default function CalendarForecast({
 
     void refresh();
     return () => { active = false; };
-  }, [loadData, refreshKey]);
+  }, [loadData, refreshKey, dataVersion]);
 
   const scheduleById = useMemo(() => {
     return new Map(schedules.map((schedule) => [schedule.id, schedule]));
@@ -281,6 +282,7 @@ export default function CalendarForecast({
       amount: safeAmount(transaction.amount_paisa),
       type: "transaction",
       source: transaction.source,
+      notes: transaction.notes,
     }));
   }, [transactions]);
 
@@ -316,11 +318,10 @@ export default function CalendarForecast({
     return allEntries
       .filter(
         (entry) =>
-          entry.date.startsWith(monthKey) &&
-          entry.date >= openingBalanceDate,
+          entry.date.startsWith(monthKey),
       )
       .sort((a, b) => a.date.localeCompare(b.date));
-  }, [allEntries, visibleMonth, openingBalanceDate]);
+  }, [allEntries, visibleMonth]);
 
   // Daily calendar totals combine recorded transactions and pending scheduled
   // occurrences, so each day provides a compact view of activity and plans.
@@ -469,6 +470,11 @@ export default function CalendarForecast({
     [transactions, selectedDate],
   );
 
+  const transactionById = useMemo(
+    () => new Map(transactions.map((transaction) => [transaction.id, transaction])),
+    [transactions],
+  );
+
   const selectedScheduledEntries = useMemo(
     () => selectedDayEntries.filter((entry) => entry.type === "scheduled"),
     [selectedDayEntries],
@@ -581,6 +587,61 @@ export default function CalendarForecast({
 
   function selectDay(date: string) {
     setSelectedDate(date);
+  }
+
+  async function deleteTransaction(transaction: Transaction) {
+    if (!window.confirm(`Delete "${transaction.description}" permanently? This will change your tracked balance.`)) {
+      return;
+    }
+
+    setDeletingTransactionId(transaction.id);
+    setError("");
+
+    try {
+      const { data, error: deleteError } = await supabase
+        .from("transactions")
+        .delete()
+        .eq("id", transaction.id)
+        .eq("user_id", userId)
+        .select("id")
+        .maybeSingle();
+
+      if (deleteError) throw deleteError;
+      if (!data) {
+        throw new Error("The transaction was not deleted. It may already have been removed.");
+      }
+
+      onTransactionChanged();
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Could not delete the transaction.",
+      );
+    } finally {
+      setDeletingTransactionId(null);
+    }
+  }
+
+  function transactionActions(transaction: Transaction) {
+    return (
+      <div className="cf-transaction-actions">
+        <button
+          type="button"
+          className="secondary-button small-button"
+          onClick={() => onEditTransaction(transaction)}
+          disabled={deletingTransactionId !== null}
+        >
+          Edit
+        </button>
+        <button
+          type="button"
+          className="danger-button small-button"
+          onClick={() => void deleteTransaction(transaction)}
+          disabled={deletingTransactionId !== null}
+        >
+          {deletingTransactionId === transaction.id ? "Deleting…" : "Delete"}
+        </button>
+      </div>
+    );
   }
 
   if (loading) {
@@ -766,11 +827,45 @@ export default function CalendarForecast({
         </div>
 
         {selectedDate < openingBalanceDate ? (
-          <div className="cf-empty-state">
-            This date is before your opening-balance date (
-            {fullDateLabel(openingBalanceDate)}). No balance can be calculated
-            from the configured opening balance for this day.
-          </div>
+          <>
+            <div className="cf-empty-state">
+              This date is before your opening-balance date (
+              {fullDateLabel(openingBalanceDate)}). No balance can be calculated
+              from the configured opening balance for this day.
+            </div>
+            <div className="cf-detail-section">
+              <div className="cf-section-heading">
+                <h4>Transactions from this date</h4>
+                <span>{selectedActualTransactions.length} recorded</span>
+              </div>
+              {selectedActualTransactions.length === 0 ? (
+                <div className="cf-empty-state">No transactions on this date.</div>
+              ) : (
+                <div className="cf-transaction-list">
+                  {selectedActualTransactions.map((transaction) => (
+                    <div className="cf-transaction-row" key={transaction.id}>
+                      <div className="cf-transaction-main">
+                        <span
+                          className={`cf-kind-indicator ${transaction.kind === "income" ? "cf-kind-income" : "cf-kind-expense"}`}
+                          aria-hidden="true"
+                        />
+                        <div className="cf-transaction-description">
+                          <strong>{transaction.description}</strong>
+                          <span>Recorded transaction</span>
+                          {transaction.notes && <span>{transaction.notes}</span>}
+                        </div>
+                      </div>
+                      <strong className={transaction.kind === "income" ? "cf-text-income" : "cf-text-expense"}>
+                        {transaction.kind === "income" ? "+" : "−"}
+                        {moneyTotal(safeAmount(transaction.amount_paisa))}
+                      </strong>
+                      {transactionActions(transaction)}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </>
         ) : (
           <>
             <div className="cf-balance-summary">
@@ -884,6 +979,7 @@ export default function CalendarForecast({
                                 : ""
                               }`}
                           </span>
+                          {entry.notes && <span>{entry.notes}</span>}
                         </div>
                       </div>
 
@@ -897,6 +993,10 @@ export default function CalendarForecast({
                         {entry.kind === "income" ? "+" : "−"}
                         {moneyTotal(entry.amount)}
                       </strong>
+
+                      {entry.type === "transaction" &&
+                        transactionById.get(entry.id) &&
+                        transactionActions(transactionById.get(entry.id)!)}
                     </div>
                   ))}
                 </div>

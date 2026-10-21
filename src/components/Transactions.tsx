@@ -1,4 +1,4 @@
-
+﻿
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { FormEvent } from "react";
 import { supabase } from "../lib/supabase";
@@ -7,7 +7,6 @@ import {
     getLocalDateString,
     parseTakaToPaisa,
 } from "../lib/money";
-import { ImportTransactions } from "./ImportTransactions";
 
 type Category = {
     id: string;
@@ -27,11 +26,16 @@ type Transaction = {
     source: string;
 };
 
+export type EditableTransaction = Transaction;
+
 type Props = {
     userId: string;
     openingBalancePaisa: string | number;
     openingBalanceDate: string;
     categories: Category[];
+    transactionToEdit: EditableTransaction | null;
+    onEditCancelled: () => void;
+    onTransactionChanged: () => void;
 };
 
 const PAGE_SIZE = 1000;
@@ -41,47 +45,52 @@ export default function Transactions({
     openingBalancePaisa,
     openingBalanceDate,
     categories,
+    transactionToEdit,
+    onEditCancelled,
+    onTransactionChanged,
 }: Props) {
-    const [kind, setKind] = useState<"expense" | "income">("expense");
-    const [date, setDate] = useState(getLocalDateString());
-    const [description, setDescription] = useState("");
-    const [amount, setAmount] = useState("");
-    const [categoryId, setCategoryId] = useState("");
-    const [notes, setNotes] = useState("");
+    const [kind, setKind] = useState<"expense" | "income">(
+        () => transactionToEdit?.kind ?? "expense"
+    );
+    const [date, setDate] = useState(
+        () => transactionToEdit?.transaction_date ?? getLocalDateString()
+    );
+    const [description, setDescription] = useState(
+        () => transactionToEdit?.description ?? ""
+    );
+    const [amount, setAmount] = useState(() => transactionToEdit
+        ? formatPaisa(transactionToEdit.amount_paisa).replace(/[^0-9.-]/g, "")
+        : ""
+    );
+    const [categoryId, setCategoryId] = useState(
+        () => transactionToEdit?.category_id ?? ""
+    );
+    const [notes, setNotes] = useState(() => transactionToEdit?.notes ?? "");
 
     const [transactions, setTransactions] = useState<Transaction[]>([]);
-    const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [error, setError] = useState("");
     const [message, setMessage] = useState("");
     const [reloadKey, setReloadKey] = useState(0);
 
-    const [editingId, setEditingId] = useState<string | null>(null);
-    const [deletingId, setDeletingId] = useState<string | null>(null);
-    const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+    const editingId = transactionToEdit?.id ?? null;
 
 
     const availableCategories = useMemo(
         () =>
             categories.filter(
                 (category) =>
-                    category.kind === kind && category.is_active
+                    category.kind === kind &&
+                    (category.is_active ||
+                        category.id === transactionToEdit?.category_id)
             ),
-        [categories, kind]
+        [categories, kind, transactionToEdit?.category_id]
     );
 
     // Keep the selected value valid without syncing derived state in an effect.
     const selectedCategoryId = availableCategories.some(
         (category) => category.id === categoryId
     ) ? categoryId : (availableCategories[0]?.id ?? "");
-
-    const categoryNames = useMemo(
-        () => new Map(categories.map((category) => [
-            category.id,
-            category.name,
-        ])),
-        [categories]
-    );
 
     const loadTransactions = useCallback(async () => {
             const allRows: Transaction[] = [];
@@ -111,86 +120,11 @@ export default function Transactions({
     }, [userId]);
 
 
-    function startEditing(transaction: Transaction) {
-        setEditingId(transaction.id);
-        setKind(transaction.kind);
-        setDate(transaction.transaction_date);
-        setDescription(transaction.description);
-        setAmount(
-            formatPaisa(transaction.amount_paisa)
-                .replace(/^৳/, "")
-                .replace(/,/g, "")
-        );
-        setCategoryId(transaction.category_id);
-        setNotes(transaction.notes ?? "");
-        setError("");
-        setMessage("");
-        setConfirmDeleteId(null);
-
-        // Move focus toward the form for a smoother editing workflow.
-        document.getElementById("transaction-description")?.focus();
-    }
-
     function cancelEditing() {
-        setEditingId(null);
-        setDescription("");
-        setAmount("");
-        setNotes("");
-        setDate(getLocalDateString());
+        onEditCancelled();
         setError("");
         setMessage("");
     }
-
-    async function deleteTransaction(transactionId: string) {
-        const transaction = transactions.find(
-            (item) => item.id === transactionId
-        );
-
-        if (!transaction) {
-            setError("This transaction is no longer in the displayed history.");
-            setConfirmDeleteId(null);
-            return;
-        }
-
-        setDeletingId(transactionId);
-        setError("");
-        setMessage("");
-
-        try {
-            const { data, error } = await supabase
-                .from("transactions")
-                .delete()
-                .eq("id", transactionId)
-                .eq("user_id", userId)
-                .select("id")
-                .maybeSingle();
-
-            if (error) throw error;
-
-            if (!data) {
-                throw new Error(
-                    "No transaction was deleted. It may already have been removed, or you may not have permission to access it."
-                );
-            }
-
-            if (editingId === transactionId) {
-                cancelEditing();
-            }
-
-            setConfirmDeleteId(null);
-            setMessage("Transaction deleted.");
-            setReloadKey((key) => key + 1);
-        } catch (err) {
-            setError(
-                err instanceof Error
-                    ? err.message
-                    : "Could not delete the transaction."
-            );
-        } finally {
-            setDeletingId(null);
-        }
-    }
-
 
     useEffect(() => {
         let active = true;
@@ -207,8 +141,6 @@ export default function Transactions({
                             : "Could not load transaction history."
                     );
                 }
-            } finally {
-                if (active) setLoading(false);
             }
         }
 
@@ -315,7 +247,6 @@ export default function Transactions({
                 }
 
                 setMessage("Transaction updated successfully.");
-                setEditingId(null);
             } else {
                 const { error } = await supabase
                     .from("transactions")
@@ -334,9 +265,9 @@ export default function Transactions({
             setAmount("");
             setNotes("");
             setDate(getLocalDateString());
-            setConfirmDeleteId(null);
 
             setReloadKey((key) => key + 1);
+            onTransactionChanged();
         } catch (err) {
             setError(
                 err instanceof Error
@@ -375,6 +306,7 @@ export default function Transactions({
                     <label htmlFor="transaction-description">Description</label>
                     <input
                         id="transaction-description"
+                        autoFocus={Boolean(transactionToEdit)}
                         value={description}
                         onChange={(event) => setDescription(event.target.value)}
                         placeholder={
@@ -439,7 +371,7 @@ export default function Transactions({
                         disabled={saving || availableCategories.length === 0}
                     >
                         {saving
-                            ? "Saving…"
+                            ? "Savingâ€¦"
                             : editingId
                                 ? "Save changes"
                                 : "Save transaction"}
@@ -474,134 +406,7 @@ export default function Transactions({
                 </p>
             </section>
 
-            <ImportTransactions
-  userId={userId}
-  openingBalanceDate={openingBalanceDate}
-  categories={categories}
-  onImported={() => setReloadKey((key) => key + 1)}
-/>
-
-            <section className="panel">
-                <div className="history-heading">
-                    <h2>Transaction history</h2>
-                    <button
-                        type="button"
-                        className="secondary-button"
-                        onClick={() => setReloadKey((key) => key + 1)}
-                        disabled={loading}
-                    >
-                        Refresh
-                    </button>
-                </div>
-
-                {loading ? (
-                    <p className="muted">Loading transactions…</p>
-                ) : transactions.length === 0 ? (
-                    <p className="muted">No transactions yet. Add your first one above.</p>
-                ) : (
-                    <div className="table-scroll">
-                        <table className="transaction-table">
-                            <thead>
-                                <tr>
-                                    <th>Date</th>
-                                    <th>Description</th>
-                                    <th>Category</th>
-                                    <th>Type</th>
-                                    <th className="amount-cell">Amount</th>
-                                    <th>Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {transactions.map((transaction) => (
-                                    <tr key={transaction.id}>
-                                        <td>{transaction.transaction_date}</td>
-                                        <td>
-                                            <strong>{transaction.description}</strong>
-                                            {transaction.notes && (
-                                                <div className="small muted">{transaction.notes}</div>
-                                            )}
-                                        </td>
-                                        <td>
-                                            {categoryNames.get(transaction.category_id) ?? "Unknown"}
-                                        </td>
-                                        <td>{transaction.kind}</td>
-                                        <td className="amount-cell">
-                                            <span
-                                                className={
-                                                    transaction.kind === "income"
-                                                        ? "income-amount"
-                                                        : "expense-amount"
-                                                }
-                                            >
-                                                {transaction.kind === "income" ? "+" : "−"}
-                                                {formatPaisa(transaction.amount_paisa)}
-                                            </span>
-                                        </td>
-
-                                        <td className="transaction-actions">
-                                            <div className="action-buttons">
-                                                <button
-                                                    type="button"
-                                                    className="secondary-button small-button"
-                                                    onClick={() => startEditing(transaction)}
-                                                    disabled={saving || deletingId !== null}
-                                                >
-                                                    Edit
-                                                </button>
-
-                                                <button
-                                                    type="button"
-                                                    className="danger-button small-button"
-                                                    onClick={() => {
-                                                        setConfirmDeleteId(transaction.id);
-                                                        setError("");
-                                                        setMessage("");
-                                                    }}
-                                                    disabled={saving || deletingId !== null}
-                                                >
-                                                    Delete
-                                                </button>
-                                            </div>
-
-                                            {confirmDeleteId === transaction.id && (
-                                                <div className="delete-confirmation">
-                                                    <p>Delete this transaction permanently?</p>
-                                                    <p className="small muted">
-                                                        This will change your tracked balance.
-                                                    </p>
-
-                                                    <div className="action-buttons">
-                                                        <button
-                                                            type="button"
-                                                            className="danger-button small-button"
-                                                            onClick={() => void deleteTransaction(transaction.id)}
-                                                            disabled={deletingId === transaction.id}
-                                                        >
-                                                            {deletingId === transaction.id
-                                                                ? "Deleting…"
-                                                                : "Confirm delete"}
-                                                        </button>
-
-                                                        <button
-                                                            type="button"
-                                                            className="secondary-button small-button"
-                                                            onClick={() => setConfirmDeleteId(null)}
-                                                            disabled={deletingId === transaction.id}
-                                                        >
-                                                            Keep transaction
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                            )}
-                                        </td>
-
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                )}
-            </section>
         </div>
     );
 }
+

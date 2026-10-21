@@ -516,6 +516,17 @@
   text-align: right;
 }
 
+.cf-transaction-actions {
+  display: flex;
+  flex-shrink: 0;
+  gap: 6px;
+}
+
+.cf-transaction-actions button {
+  padding: 6px 9px;
+  font-size: 0.78rem;
+}
+
 .cf-empty-state {
   padding: 18px 14px;
   border: 1px dashed var(--border-color, #d1d5db);
@@ -697,7 +708,16 @@
   }
 
   .cf-transaction-row {
+    flex-wrap: wrap;
     gap: 8px;
+  }
+
+  .cf-transaction-main {
+    flex: 1 1 65%;
+  }
+
+  .cf-transaction-actions {
+    margin-left: auto;
   }
 
   .cf-transaction-description strong {
