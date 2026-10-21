@@ -42,13 +42,6 @@ const APP_SCREENS: { id: AppScreen; label: string }[] = [
   { id: "settings", label: "Settings" },
 ];
 
-function formatBDT(paisa: number | string) {
-  return new Intl.NumberFormat("en-BD", {
-    style: "currency",
-    currency: "BDT",
-  }).format(Number(paisa) / 100);
-}
-
 export default function App() {
   const [session, setSession] = useState<Session | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -285,44 +278,6 @@ export default function App() {
     setSettings(data as unknown as UserSettings);
   }
 
-  async function checkOtherUserReadIsolation() {
-    if (!session) return;
-
-    const otherUserId = window
-      .prompt("Enter the other test account's User ID:")
-      ?.trim();
-
-    if (!otherUserId) return;
-
-    if (otherUserId === session.user.id) {
-      setError("Use the other account's User ID, not your own.");
-      return;
-    }
-
-    setError("");
-    setMessage("");
-
-    const { data, error } = await supabase
-      .from("categories")
-      .select("id, name")
-      .eq("user_id", otherUserId);
-
-    if (error) {
-      setError(`RLS test inconclusive: ${error.message}`);
-      return;
-    }
-
-    if (data.length === 0) {
-      setMessage(
-        "Read-isolation test passed: no categories from the other account were visible."
-      );
-    } else {
-      setError(
-        `RLS WARNING: ${data.length} category row(s) from the other account were visible. Stop testing and review RLS policies.`
-      );
-    }
-  }
-
   if (authLoading) {
     return (
       <main className="page">
@@ -409,13 +364,6 @@ export default function App() {
     );
   }
 
-  const incomeCount = categories.filter(
-    (category) => category.kind === "income"
-  ).length;
-
-  const expenseCount = categories.filter(
-    (category) => category.kind === "expense"
-  ).length;
 
   return (
     <main className="page">
@@ -464,30 +412,13 @@ export default function App() {
       ) : (
         <>
           {activeScreen === "dashboard" && (
-            <>
-              <section className="summary-grid">
-                <article className="panel">
-                  <p className="muted">Opening balance</p>
-                  <h2>{formatBDT(settings.opening_balance_paisa)}</h2>
-                  <p className="small muted">{settings.opening_balance_date}</p>
-                </article>
-                <article className="panel">
-                  <p className="muted">Income categories</p>
-                  <h2>{incomeCount}</h2>
-                </article>
-                <article className="panel">
-                  <p className="muted">Expense categories</p>
-                  <h2>{expenseCount}</h2>
-                </article>
-              </section>
-              <FinancialDashboard
-                key={`${session.user.id}:${transactionRefreshKey}`}
-                userId={session.user.id}
-                openingBalancePaisa={settings.opening_balance_paisa}
-                openingBalanceDate={settings.opening_balance_date}
-                forecastHorizonMonths={settings.forecast_horizon_months}
-              />
-            </>
+            <FinancialDashboard
+              key={`${session.user.id}:${transactionRefreshKey}`}
+              userId={session.user.id}
+              openingBalancePaisa={settings.opening_balance_paisa}
+              openingBalanceDate={settings.opening_balance_date}
+              forecastHorizonMonths={settings.forecast_horizon_months}
+            />
           )}
 
           {activeScreen === "transactions" && (
@@ -574,19 +505,6 @@ export default function App() {
                 settings={settings}
                 onSettingsChanged={refreshSettings}
               />
-              <section className="panel">
-                <h2>Security check</h2>
-                <p className="muted">
-                  Test whether another user's categories are hidden by database security policies.
-                </p>
-                <button
-                  type="button"
-                  className="secondary-button"
-                  onClick={checkOtherUserReadIsolation}
-                >
-                  Test RLS read isolation
-                </button>
-              </section>
             </>
           )}
         </>
