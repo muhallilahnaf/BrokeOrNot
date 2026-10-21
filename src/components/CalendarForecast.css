@@ -107,6 +107,10 @@
   background: #dc2626;
 }
 
+.cf-legend-actual::before {
+  background: #15803d;
+}
+
 .cf-legend-projected::before {
   background: #64748b;
 }
@@ -281,6 +285,25 @@
   color: var(--muted-color, #64748b);
   font-size: 0.68rem;
   line-height: 1.25;
+}
+
+.cf-actual {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: auto;
+  padding-top: 5px;
+  border-top: 2px solid #86efac;
+  color: #15803d;
+  font-size: 0.68rem;
+  line-height: 1.25;
+}
+
+.cf-actual strong {
+  overflow-wrap: anywhere;
+  color: #166534;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
 }
 
 .cf-projected strong {
@@ -568,7 +591,15 @@
     font-size: 0.64rem;
   }
 
+  .cf-actual {
+    font-size: 0.64rem;
+  }
+
   .cf-projected strong {
+    font-size: 0.69rem;
+  }
+
+  .cf-actual strong {
     font-size: 0.69rem;
   }
 }
@@ -632,7 +663,18 @@
     font-size: 0.56rem;
   }
 
+  .cf-actual {
+    gap: 1px;
+    padding-top: 3px;
+    font-size: 0.56rem;
+  }
+
   .cf-projected strong {
+    font-size: 0.6rem;
+    line-height: 1.2;
+  }
+
+  .cf-actual strong {
     font-size: 0.6rem;
     line-height: 1.2;
   }
@@ -755,7 +797,15 @@
     font-size: 0.51rem;
   }
 
+  .cf-actual {
+    font-size: 0.51rem;
+  }
+
   .cf-projected strong {
+    font-size: 0.54rem;
+  }
+
+  .cf-actual strong {
     font-size: 0.54rem;
   }
 }

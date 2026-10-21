@@ -357,6 +357,43 @@ export default function CalendarForecast({
     }, openingBalance);
   }, [transactions, openingBalance, openingBalanceDate, today]);
 
+  const actualBalanceByDate = useMemo(() => {
+    const dailyChanges = new Map<string, bigint>();
+
+    for (const transaction of transactions) {
+      if (
+        transaction.transaction_date < openingBalanceDate ||
+        transaction.transaction_date > today
+      ) {
+        continue;
+      }
+
+      const previous = dailyChanges.get(transaction.transaction_date) ?? 0n;
+      dailyChanges.set(
+        transaction.transaction_date,
+        addSigned(
+          previous,
+          transaction.kind,
+          safeAmount(transaction.amount_paisa),
+        ),
+      );
+    }
+
+    const balances = new Map<string, bigint>();
+    const cursor = parseDate(openingBalanceDate);
+    const lastDate = parseDate(today);
+    let balance = openingBalance;
+
+    while (cursor <= lastDate) {
+      const date = dateString(cursor);
+      balance += dailyChanges.get(date) ?? 0n;
+      balances.set(date, balance);
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    return balances;
+  }, [transactions, openingBalance, openingBalanceDate, today]);
+
   // Balance at the start of today, before today's recorded transactions.
   const openingBalanceToday = useMemo(() => {
     return transactions.reduce((balance, transaction) => {
@@ -694,6 +731,7 @@ export default function CalendarForecast({
       <div className="cf-legend">
         <span className="cf-legend-income">Income</span>
         <span className="cf-legend-expense">Expense</span>
+        <span className="cf-legend-actual">Actual balance</span>
         <span className="cf-legend-projected">Projected balance</span>
       </div>
 
@@ -747,6 +785,7 @@ export default function CalendarForecast({
           }
 
           const totals = dailyTotals.get(date) ?? emptyTotals();
+          const actual = actualBalanceByDate.get(date);
           const projected = projectedBalanceByDate.get(date);
           const isSelected = date === selectedDate;
           const isToday = date === today;
@@ -770,7 +809,10 @@ export default function CalendarForecast({
               aria-pressed={isSelected}
               aria-label={`${fullDateLabel(date)}. Income ${moneyTotal(
                 totals.income,
-              )}, expense ${moneyTotal(totals.expense)}${projected !== undefined
+              )}, expense ${moneyTotal(totals.expense)}${actual !== undefined
+                  ? `, actual balance ${moneyTotal(actual)}`
+                  : ""
+                }${projected !== undefined
                   ? `, projected balance ${moneyTotal(projected)}`
                   : ""
                 }. Click to view details.`}
@@ -794,6 +836,13 @@ export default function CalendarForecast({
                 </span>
               )}
 
+              {actual !== undefined && (
+                <span className="cf-actual">
+                  <span>Actual</span>
+                  <strong>{moneyTotal(actual)}</strong>
+                </span>
+              )}
+
               {projected !== undefined && (
                 <span className="cf-projected">
                   <span>Projected</span>
@@ -801,7 +850,7 @@ export default function CalendarForecast({
                 </span>
               )}
 
-              {!hasEntries && projected === undefined && (
+              {!hasEntries && actual === undefined && projected === undefined && (
                 <span className="cf-no-activity">No activity</span>
               )}
             </button>
